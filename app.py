@@ -731,7 +731,11 @@ class AutoCopierApp(ctk.CTk):
 
     def update_item_status(self, item_id, status_text, tag):
         try:
-            self.video_tree.set(item_id, "status", status_text)
+            final_text = status_text
+            if tag == 'success' and 'Hoàn thành' in status_text:
+                final_text = f"✔ {status_text}"
+
+            self.video_tree.set(item_id, "status", final_text)
             self.video_tree.item(item_id, tags=(tag,))
         except tk.TclError:
             print(f"Could not update status for item {item_id} (it may have been deleted).")

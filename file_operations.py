@@ -48,6 +48,21 @@ def find_files_on_drive(drive_path, extensions_str):
                     print(f"Could not stat file {full_path}: {e}")
                     continue
 
+def _copy_file_with_progress(source_path, dest_path, status_callback):
+    """Copies a file chunk by chunk, reporting progress."""
+    total_size = os.path.getsize(source_path)
+    copied_size = 0
+    
+    with open(source_path, 'rb') as fsrc, open(dest_path, 'wb') as fdst:
+        while True:
+            buf = fsrc.read(1024 * 1024) # Read in 1MB chunks
+            if not buf:
+                break
+            fdst.write(buf)
+            copied_size += len(buf)
+            percentage = (copied_size / total_size) * 100
+            status_callback("processing", f"Đang sao chép... ({percentage:.0f}%)")
+
 def _handle_conflict(dest_path):
     """Generate a new file name to avoid conflict."""
     base, ext = os.path.splitext(dest_path)
@@ -75,9 +90,8 @@ def copy_verify_delete_file(source_path, destination_folder, should_delete, conf
         # If policy is "Ghi Đè", we just proceed
 
     try:
-        # 1. Copy
-        status_callback("processing", "Đang sao chép...")
-        shutil.copy2(source_path, dest_path)
+        # 1. Copy with progress
+        _copy_file_with_progress(source_path, dest_path, status_callback)
         
         # 2. Verify
         status_callback("processing", "Đang xác minh...")
