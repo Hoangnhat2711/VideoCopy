@@ -2,6 +2,16 @@ import os
 import shutil
 import hashlib
 from datetime import datetime
+import psutil
+
+def get_required_space(file_paths):
+    """Calculate the total disk space required for a list of files."""
+    return sum(os.path.getsize(p) for p in file_paths if os.path.exists(p))
+
+def has_enough_space(destination_path, required_space):
+    """Check if the destination has enough free space."""
+    free_space = psutil.disk_usage(destination_path).free
+    return free_space >= required_space
 
 def _calculate_sha256(file_path):
     """Calculates the SHA256 hash of a file."""
@@ -15,37 +25,62 @@ def _calculate_sha256(file_path):
         print("Error reading file for hashing: {}".format(e))
         return None
 
-def find_videos_on_drive(drive_path):
-    """Scans a drive and yields information about video files found."""
-    video_extensions = {".mp4", ".avi", ".mov", ".mkv"}
+def find_files_on_drive(drive_path, extensions_str):
+    """Scans a drive for files with specified extensions and yields their data."""
+    try:
+        extensions = {ext.strip().lower() for ext in extensions_str.split(',')}
+    except Exception as e:
+        print(f"Could not parse extensions string: {extensions_str}. Error: {e}")
+        extensions = set()
+    
     for root, _, files in os.walk(drive_path):
         for file in files:
-            if os.path.splitext(file)[1].lower() in video_extensions:
+            if os.path.splitext(file)[1].lower() in extensions:
                 full_path = os.path.join(root, file)
                 try:
                     file_stat = os.stat(full_path)
-                    file_size = "{:.2f} MB".format(file_stat.st_size / (1024*1024))
-                    mod_time = datetime.fromtimestamp(file_stat.st_mtime).strftime('%Y-%m-%d %H:%M:%S')
-                    yield file, file_size, mod_time, full_path
+                    yield {
+                        'path': full_path,
+                        'size': file_stat.st_size,
+                        'drive': drive_path
+                    }
                 except Exception as e:
-                    print("Could not stat file {}: {}".format(full_path, e))
+                    print(f"Could not stat file {full_path}: {e}")
                     continue
 
-def copy_verify_delete_file(source_path, destination_folder, should_delete, status_callback):
+def _handle_conflict(dest_path):
+    """Generate a new file name to avoid conflict."""
+    base, ext = os.path.splitext(dest_path)
+    counter = 1
+    new_dest_path = "{}-{}{}".format(base, counter, ext)
+    while os.path.exists(new_dest_path):
+        counter += 1
+        new_dest_path = "{}-{}{}".format(base, counter, ext)
+    return new_dest_path
+
+def copy_verify_delete_file(source_path, destination_folder, should_delete, conflict_policy, status_callback):
     """
-    Handles the entire process for a single file: copy, verify, and optionally delete.
-    Invokes the status_callback with progress updates.
+    Handles the entire process for a single file, including conflict resolution.
     """
     file_name = os.path.basename(source_path)
     dest_path = os.path.join(destination_folder, file_name)
 
+    # --- Conflict Resolution ---
+    if os.path.exists(dest_path):
+        if conflict_policy == "Bỏ Qua":
+            status_callback("success", "Bỏ qua (đã tồn tại)")
+            return True, True # Skipped successfully
+        elif conflict_policy == "Đổi Tên":
+            dest_path = _handle_conflict(dest_path)
+        # If policy is "Ghi Đè", we just proceed
+
     try:
         # 1. Copy
-        status_callback("copying", "Đang sao chép...")
+        status_callback("processing", "Đang sao chép...")
         shutil.copy2(source_path, dest_path)
         
         # 2. Verify
-        status_callback("verifying", "Đang xác minh...")
+        status_callback("processing", "Đang xác minh...")
         source_hash = _calculate_sha256(source_path)
         dest_hash = _calculate_sha256(dest_path)
         if not (source_hash and dest_hash and source_hash == dest_hash):
@@ -53,14 +88,14 @@ def copy_verify_delete_file(source_path, destination_folder, should_delete, stat
 
         # 3. Delete
         if should_delete:
-            status_callback("deleting", "Đang xóa...")
+            status_callback("processing", "Đang xóa...")
             os.remove(source_path)
         
         status_callback("success", "Hoàn thành")
-        return True
+        return True, False # Processed successfully (not skipped)
 
     except Exception as e:
         error_message = "Lỗi: {}".format(e)
         status_callback("error", error_message)
         print("Failed to process {}: {}".format(source_path, e))
-        return False
+        return False, False # Failed (not skipped)

@@ -8,7 +8,7 @@ def get_removable_drives():
     try:
         return [p for p in psutil.disk_partitions() if 'removable' in p.opts or 'media' in p.opts]
     except Exception as e:
-        print("Could not get drive list: {}".format(e))
+        print(f"Could not get drive list: {e}")
         return []
 
 def eject_drive(device_path):

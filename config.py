@@ -3,15 +3,25 @@ import os
 
 CONFIG_FILE = "config.json"
 
-# --- "Zen Focus" Color Palette ---
-COLOR_BG = "#2b2b2b"
-COLOR_FRAME = "#3c3f41"
-COLOR_ACCENT_TEAL = "#4a7a8c"
-COLOR_TEXT = "#a9b7c6"
-COLOR_TEXT_HEADER = "#ffffff"
-COLOR_STATUS_SUCCESS = "#6a8759"
-COLOR_STATUS_ERROR = "#b96565"
-COLOR_STATUS_WARN = "#c7926b"
+# --- "Vibrant Focus" Color Palette ---
+COLOR_BG = "#24292e"          # GitHub Dark Dimmed
+COLOR_FRAME = "#2f363d"       # Lighter Grey
+COLOR_EDITOR_BG = "#2B2B2B"   # A neutral dark gray for text areas
+COLOR_ACCENT_SKYBLUE = "#58a6ff" # Sky Blue
+COLOR_ACCENT_GREEN = "#3fb950"   # Vibrant Green
+COLOR_ACCENT_ORANGE = "#f78166"  # Vibrant Orange
+COLOR_TEXT = "#c9d1d9"        # Soft White/Grey
+COLOR_TEXT_HEADER = "#ffffff" # Pure White for Headers
+COLOR_DISABLED = "#555555"
+    
+# Status Colors
+COLOR_STATUS_SUCCESS = "#3fb950"
+COLOR_STATUS_ERROR = "#f85149"
+COLOR_STATUS_WARN = "#d29922"
+
+# --- Default Settings ---
+DEFAULT_VIDEO_EXTENSIONS = ".mp4, .mov, .mkv, .avi"
+DEFAULT_CONFLICT_POLICY = "Đổi Tên" # Options: "Bỏ Qua", "Ghi Đè", "Đổi Tên"
 
 
 def save_config(data):
@@ -31,4 +41,9 @@ def load_config():
                 return json.load(f)
         except (IOError, json.JSONDecodeError) as e:
             print("Error loading config: {}".format(e))
-    return {}
+    # Return defaults if file doesn't exist or is empty
+    return {
+        "destination_path": "",
+        "video_extensions": DEFAULT_VIDEO_EXTENSIONS,
+        "conflict_policy": DEFAULT_CONFLICT_POLICY
+    }
