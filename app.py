@@ -4,6 +4,7 @@ from tkinter import ttk, filedialog, messagebox
 import threading
 import time
 import os
+import sys
 import psutil # Added for disk space check
 from datetime import datetime
 
@@ -11,6 +12,19 @@ from datetime import datetime
 import config
 import file_operations
 import drive_manager
+
+def get_drive_name_from_mountpoint(mountpoint):
+    """Gets a clean, usable folder name from a drive's mountpoint."""
+    if not mountpoint:
+        return "Unknown_Drive"
+    
+    # For Windows, mountpoint might be 'D:\\'. We want 'D'.
+    if sys.platform == "win32" and ":" in mountpoint:
+        return mountpoint.split(":")[0]
+    
+    # For macOS/Linux, /Volumes/MyDisk or /media/user/MyDisk
+    name = os.path.basename(mountpoint)
+    return name if name else "Unknown_Drive"
 
 class DriveWidget(ctk.CTkFrame):
     def __init__(self, master, mountpoint, description, selection_callback, eject_callback):
@@ -28,7 +42,7 @@ class DriveWidget(ctk.CTkFrame):
         self.checkbox.grid(row=0, column=0, rowspan=2, padx=10, pady=5)
 
         # Drive name and description
-        self.name_label = ctk.CTkLabel(self, text=os.path.basename(mountpoint), anchor="w", font=ctk.CTkFont(weight="bold"))
+        self.name_label = ctk.CTkLabel(self, text=get_drive_name_from_mountpoint(mountpoint), anchor="w", font=ctk.CTkFont(weight="bold"))
         self.name_label.grid(row=0, column=1, sticky="ew", padx=5, pady=(5,0))
         self.description_label = ctk.CTkLabel(self, text=description, anchor="w", text_color="gray")
         self.description_label.grid(row=1, column=1, sticky="ew", padx=5, pady=(0,5))
@@ -361,7 +375,7 @@ class AutoCopierApp(ctk.CTk):
         for drive in current_drives:
             mountpoint = drive.mountpoint
             if mountpoint not in self.drive_widgets:
-                drive_label = os.path.basename(mountpoint)
+                drive_label = get_drive_name_from_mountpoint(mountpoint)
                 # A simple description from the drive label and file system type
                 description = f"{drive_label} ({drive.fstype})" if drive_label and drive_label != "/" else f"{drive.device} ({drive.fstype})"
                 widget = DriveWidget(self.drive_list_frame, mountpoint, description, self.on_drive_selection_changed, self.eject_active_drive)
@@ -395,7 +409,7 @@ class AutoCopierApp(ctk.CTk):
         self._update_ui_states()
 
     def eject_active_drive(self, mountpoint_to_eject):
-        drive_name = os.path.basename(mountpoint_to_eject)
+        drive_name = get_drive_name_from_mountpoint(mountpoint_to_eject)
         confirmation = messagebox.askyesno("Xác Nhận Tháo Thiết Bị", 
                                            f"Bạn có chắc chắn muốn tháo an toàn thiết bị {drive_name} không?",
                                            icon='warning')
@@ -426,20 +440,20 @@ class AutoCopierApp(ctk.CTk):
         error_details = []
 
         for mountpoint in drives_to_eject:
-            self.after(0, self.log_message, f"Đang tháo {os.path.basename(mountpoint)}...", level="INFO")
+            self.after(0, self.log_message, f"Đang tháo {get_drive_name_from_mountpoint(mountpoint)}...", level="INFO")
             drive_info = self.detected_drives.get(mountpoint)
             if not drive_info:
-                error_details.append(f" - {os.path.basename(mountpoint)}: Không tìm thấy thông tin thiết bị.")
-                self.after(0, self.log_message, f"Lỗi khi tháo {os.path.basename(mountpoint)}: Không tìm thấy thông tin.", level="ERROR")
+                error_details.append(f" - {get_drive_name_from_mountpoint(mountpoint)}: Không tìm thấy thông tin thiết bị.")
+                self.after(0, self.log_message, f"Lỗi khi tháo {get_drive_name_from_mountpoint(mountpoint)}: Không tìm thấy thông tin.", level="ERROR")
                 continue
             
             success, message = drive_manager.eject_drive(drive_info['device'])
             if success:
                 success_count += 1
-                self.after(0, self.log_message, f"Đã tháo thành công {os.path.basename(mountpoint)}.", level="SUCCESS")
+                self.after(0, self.log_message, f"Đã tháo thành công {get_drive_name_from_mountpoint(mountpoint)}.", level="SUCCESS")
             else:
-                error_details.append(f" - {os.path.basename(mountpoint)}: {message}")
-                self.after(0, self.log_message, f"Lỗi khi tháo {os.path.basename(mountpoint)}: {message}", level="ERROR")
+                error_details.append(f" - {get_drive_name_from_mountpoint(mountpoint)}: {message}")
+                self.after(0, self.log_message, f"Lỗi khi tháo {get_drive_name_from_mountpoint(mountpoint)}: {message}", level="ERROR")
         
         # Final Report
         report_message = f"Hoàn tất quá trình tháo thiết bị.\n\nThành công: {success_count}/{len(drives_to_eject)}"
@@ -453,10 +467,10 @@ class AutoCopierApp(ctk.CTk):
 
     def list_videos_from_drive(self, drive_path):
         """Initiates the video search for a specific drive."""
-        self.log_message(f"Đang tìm kiếm file trên {drive_path}...", level="INFO")
+        self.log_message(f"Đang tìm kiếm file trên {get_drive_name_from_mountpoint(drive_path)}...", level="INFO")
         # Check if drive still exists before starting the thread
         if drive_path not in self.detected_drives:
-            self.log_message(f"Hủy quét: {os.path.basename(drive_path)} không còn được kết nối.", "WARN")
+            self.log_message(f"Hủy quét: {get_drive_name_from_mountpoint(drive_path)} không còn được kết nối.", "WARN")
             widget = self.drive_widgets.get(drive_path)
             if widget:
                 widget.finish_scan() # Mark as 'done' even if it disappeared
@@ -465,7 +479,7 @@ class AutoCopierApp(ctk.CTk):
     
     def clear_video_list_for_drive(self, mountpoint_to_clear):
         """Clears videos from the Treeview that belong to a specific drive."""
-        drive_name_to_clear = os.path.basename(mountpoint_to_clear)
+        drive_name_to_clear = get_drive_name_from_mountpoint(mountpoint_to_clear)
         items_to_delete = []
         for item_id in self.video_tree.get_children():
             item_drive_name = self.video_tree.item(item_id, "values")[3]
@@ -584,7 +598,7 @@ class AutoCopierApp(ctk.CTk):
         files_to_copy_paths = [v['path'] for v in videos_to_process]
         required_space = file_operations.get_required_space(files_to_copy_paths)
         
-        drive_name = os.path.basename(mountpoint)
+        drive_name = get_drive_name_from_mountpoint(mountpoint)
         final_destination = os.path.join(destination_root, drive_name)
         
         if not file_operations.has_enough_space(destination_root, required_space):
@@ -609,7 +623,7 @@ class AutoCopierApp(ctk.CTk):
                 num_files = len(videos_to_process)
                 confirm_message = f"Bạn có chắc chắn muốn XÓA VĨNH VIỄN {num_files} file đã chọn sau khi sao chép thành công không?"
             else:
-                drive_name = os.path.basename(mountpoint)
+                drive_name = get_drive_name_from_mountpoint(mountpoint)
                 confirm_message = f"Bạn có chắc chắn muốn XÓA VĨNH VIỄN các file gốc trên thẻ {drive_name} sau khi sao chép thành công không?"
 
             if not messagebox.askyesno("Xác Nhận Xóa", confirm_message, icon='warning'):
@@ -619,7 +633,7 @@ class AutoCopierApp(ctk.CTk):
         self.progress_frame.grid()
         self.progress_bar.set(0)
         self.progress_status_label.configure(text="Chuẩn bị sao chép...")
-        self.log_message("Bắt đầu quá trình sao chép cho {}...".format(os.path.basename(mountpoint) if mountpoint != 'Manual' else 'các file đã chọn'))
+        self.log_message("Bắt đầu quá trình sao chép cho {}...".format(get_drive_name_from_mountpoint(mountpoint) if mountpoint != 'Manual' else 'các file đã chọn'))
 
         threading.Thread(target=self._copy_process_thread, 
                          args=(videos_to_process, destination_root, self.delete_after_copy.get(), item_ids, mountpoint), 
@@ -641,10 +655,11 @@ class AutoCopierApp(ctk.CTk):
             if is_manual_mode:
                 # In manual mode, we get the drive mountpoint from the video_info dictionary
                 # which was stored when the file list was created.
-                drive_name = os.path.basename(video_info.get('drive', 'Unknown_Drive'))
+                drive_mountpoint = video_info.get('drive', 'Unknown_Drive')
+                drive_name = get_drive_name_from_mountpoint(drive_mountpoint)
             else:
                 # In auto mode, the process_id is the mountpoint
-                drive_name = os.path.basename(process_id)
+                drive_name = get_drive_name_from_mountpoint(process_id)
 
             final_destination_folder = os.path.join(destination_root, drive_name)
             try:
@@ -683,7 +698,7 @@ class AutoCopierApp(ctk.CTk):
                 status_callback("error", f"Lỗi nghiêm trọng: {e}")
         
         # --- Finalize ---
-        report_id = os.path.basename(process_id) if not is_manual_mode else "các file đã chọn"
+        report_id = get_drive_name_from_mountpoint(process_id) if not is_manual_mode else "các file đã chọn"
         self.after(0, self.show_final_report, final_results, report_id)
         self.after(0, lambda: self.progress_frame.grid_remove()) # Hide progress bar
         self.after(0, self.log_message, f"Hoàn tất quá trình cho {report_id}.")
@@ -696,7 +711,7 @@ class AutoCopierApp(ctk.CTk):
         if not self.monitoring: return None
         try:
             size_mb = video_data['size'] / (1024*1024)
-            drive_name = os.path.basename(video_data.get('drive', 'N/A'))
+            drive_name = get_drive_name_from_mountpoint(video_data.get('drive', 'N/A'))
             
             item_id = self.video_tree.insert("", "end", values=(
                 "Sẵn sàng",
@@ -714,7 +729,7 @@ class AutoCopierApp(ctk.CTk):
             return None
 
     def show_no_videos_found(self, drive_path):
-        self.log_message(f"Không tìm thấy file video nào phù hợp trên {os.path.basename(drive_path)}.", "WARN")
+        self.log_message(f"Không tìm thấy file video nào phù hợp trên {get_drive_name_from_mountpoint(drive_path)}.", "WARN")
 
     def show_final_report(self, results, drive_name):
         """Display a summary report after a process finishes."""
