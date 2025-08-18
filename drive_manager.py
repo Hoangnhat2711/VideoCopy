@@ -38,14 +38,18 @@ def eject_drive(device_path):
             subprocess.run(["diskutil", "eject", device_path], check=True, capture_output=True)
             return True, "Đã tháo an toàn thiết bị."
         elif sys.platform == "win32":  # Windows
-            # This is a placeholder as it's more complex on Windows
-            return False, "Chức năng tháo an toàn trên Windows hiện chưa được hỗ trợ."
+            drive_letter = device_path.replace("\\", "")
+            ps_command = f"(New-Object -comObject Shell.Application).Namespace(17).ParseName('{drive_letter}').InvokeVerb('Eject')"
+            subprocess.run(["powershell", "-WindowStyle", "Hidden", "-Command", ps_command], check=True, capture_output=True)
+            return True, "Đã tháo an toàn thiết bị."
         else:  # Linux
             subprocess.run(["udisksctl", "unmount", "-b", device_path], check=True, capture_output=True)
             subprocess.run(["udisksctl", "power-off", "-b", device_path], check=True, capture_output=True)
             return True, "Đã tháo an toàn thiết bị."
     except subprocess.CalledProcessError as e:
-        error_message = e.stderr.decode().strip() if e.stderr else str(e)
+        error_message = e.stderr.decode('utf-8', errors='ignore').strip() if e.stderr else str(e)
+        if not error_message: # PowerShell sometimes writes errors to stdout
+             error_message = e.stdout.decode('utf-8', errors='ignore').strip()
         return False, "Lỗi khi tháo thẻ nhớ: {}".format(error_message)
     except Exception as e:
         return False, "Lỗi không xác định: {}".format(e)
