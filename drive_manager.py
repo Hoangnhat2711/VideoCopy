@@ -4,9 +4,26 @@ import subprocess
 import os
 
 def get_removable_drives():
-    """Returns a list of removable drive partitions."""
+    """Returns a list of removable drive partitions, with special handling for macOS."""
+    drives = []
     try:
-        return [p for p in psutil.disk_partitions() if 'removable' in p.opts or 'media' in p.opts]
+        partitions = psutil.disk_partitions()
+        for p in partitions:
+            # Standard check for removable flag or media flag (common on Linux)
+            is_removable = 'removable' in p.opts or 'media' in p.opts
+
+            # macOS specific check: external drives typically mount under /Volumes
+            is_macos_external = (sys.platform == "darwin" and p.mountpoint.startswith('/Volumes/'))
+
+            if is_removable or is_macos_external:
+                # Basic check to avoid including the root filesystem if it's not caught by other flags
+                if p.mountpoint != '/':
+                    drives.append(p)
+        
+        # Ensure the list is unique by device to avoid duplicates
+        unique_drives = {drive.device: drive for drive in drives}.values()
+        return list(unique_drives)
+
     except Exception as e:
         print(f"Could not get drive list: {e}")
         return []
