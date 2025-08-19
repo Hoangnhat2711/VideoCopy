@@ -702,7 +702,7 @@ class AutoCopierApp(ctk.CTk):
                         final_results["error"] += 1
                 except Exception as e:
                     final_results["error"] += 1
-                    status_callback("error", f"Lỗi nghiêm trọng: {e}")
+                    status_callback("error", f"Lỗi nghiêm trọng: {e}", -1.0)
                 
                 # After processing, calculate duration and update UI
                 duration = time.time() - start_time
@@ -791,7 +791,7 @@ class AutoCopierApp(ctk.CTk):
                     bar_length = 10
                     filled_length = int(bar_length * progress_value)
                     bar = '█' * filled_length + '-' * (bar_length - filled_length)
-                    progress_bar = f"[{bar}] {progress_value*100:.0f}%"
+                    progress_bar = f"[{bar}] {int(progress_value * 100)}%"
                 self.video_tree.set(item_id, "progress", progress_bar)
             
             # Update color tag

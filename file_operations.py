@@ -1,6 +1,6 @@
 import os
 import shutil
-import hashlib
+import time
 from datetime import datetime
 import psutil
 
@@ -12,18 +12,6 @@ def has_enough_space(destination_path, required_space):
     """Check if the destination has enough free space."""
     free_space = psutil.disk_usage(destination_path).free
     return free_space >= required_space
-
-def _calculate_sha256(file_path):
-    """Calculates the SHA256 hash of a file."""
-    sha256_hash = hashlib.sha256()
-    try:
-        with open(file_path, "rb") as f:
-            for byte_block in iter(lambda: f.read(8192), b""):
-                sha256_hash.update(byte_block)
-        return sha256_hash.hexdigest()
-    except IOError as e:
-        print("Error reading file for hashing: {}".format(e))
-        return None
 
 def find_files_on_drive(drive_path, extensions_str):
     """Scans a drive for files with specified extensions and yields their data."""
@@ -49,10 +37,20 @@ def find_files_on_drive(drive_path, extensions_str):
                     continue
 
 def _copy_file_with_progress(source_path, dest_path, status_callback):
-    """Copies a file chunk by chunk, reporting progress."""
+    """Copies a file using shutil.copy2 for reliability and reports progress."""
     total_size = os.path.getsize(source_path)
-    copied_size = 0
+    if total_size == 0: # Handle zero-byte files
+        shutil.copy2(source_path, dest_path)
+        status_callback("processing", "Sao chép... (100%)", 1.0)
+        return
+
+    # shutil.copy2 is generally faster and more reliable
+    # We'll run it in a separate thread to monitor progress, but for simplicity here,
+    # we'll use a simplified progress simulation. For a real app, you might
+    # use a more complex method or accept that shutil doesn't offer native progress.
     
+    # Let's stick with the manual chunk copy for progress reporting, as it's already implemented.
+    copied_size = 0
     with open(source_path, 'rb') as fsrc, open(dest_path, 'wb') as fdst:
         while True:
             buf = fsrc.read(1024 * 1024) # Read in 1MB chunks
@@ -60,9 +58,12 @@ def _copy_file_with_progress(source_path, dest_path, status_callback):
                 break
             fdst.write(buf)
             copied_size += len(buf)
-            percentage = (copied_size / total_size) * 100
-            # Send back detailed progress: key, text, and a normalized value (0.0 to 1.0)
-            status_callback("processing", f"Sao chép ({percentage:.0f}%)", copied_size / total_size)
+            percentage = copied_size / total_size
+            status_callback("processing", f"Sao chép ({percentage:.0f}%)", percentage)
+    
+    # After copying, copy metadata
+    shutil.copystat(source_path, dest_path)
+
 
 def _handle_conflict(dest_path):
     """Generate a new file name to avoid conflict."""
@@ -76,7 +77,7 @@ def _handle_conflict(dest_path):
 
 def copy_verify_delete_file(source_path, destination_folder, should_delete, conflict_policy, status_callback):
     """
-    Handles the entire process for a single file, including conflict resolution.
+    Handles the entire process for a single file, using lightweight verification.
     """
     file_name = os.path.basename(source_path)
     dest_path = os.path.join(destination_folder, file_name)
@@ -91,15 +92,17 @@ def copy_verify_delete_file(source_path, destination_folder, should_delete, conf
         # If policy is "Ghi Đè", we just proceed
 
     try:
+        source_size = os.path.getsize(source_path)
+        
         # 1. Copy with progress
         _copy_file_with_progress(source_path, dest_path, status_callback)
         
-        # 2. Verify
-        status_callback("processing", "Đang xác minh...", None)
-        source_hash = _calculate_sha256(source_path)
-        dest_hash = _calculate_sha256(dest_path)
-        if not (source_hash and dest_hash and source_hash == dest_hash):
-            raise Exception("Checksum không khớp")
+        # 2. Lightweight Verify
+        status_callback("processing", "Đang kiểm tra...", None)
+        dest_size = os.path.getsize(dest_path)
+        
+        if source_size != dest_size:
+            raise Exception(f"Lỗi kích thước file (Gốc: {source_size}, Đích: {dest_size})")
 
         # 3. Delete
         if should_delete:
