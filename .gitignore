@@ -1,16 +1,18 @@
-# Byte-compiled / optimized / DLL files
+# Build artifacts
+dist/
+build/
+*.spec
+
+# Python cache
 __pycache__/
-*.py[cod]
-*$py.class
+*.pyc
 
-# Configuration files
-config.json
+# Icon files (often generated)
+*.icns
 
-# Virtual environment
-.venv
-venv/
-venv
-ENV/
-env/
-env
-.env
+# macOS system files
+.DS_Store
+
+# IDE files (optional but good practice)
+.vscode/
+.idea/

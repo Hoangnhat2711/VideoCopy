@@ -61,7 +61,8 @@ def _copy_file_with_progress(source_path, dest_path, status_callback):
             fdst.write(buf)
             copied_size += len(buf)
             percentage = (copied_size / total_size) * 100
-            status_callback("processing", f"Đang sao chép... ({percentage:.0f}%)")
+            # Send back detailed progress: key, text, and a normalized value (0.0 to 1.0)
+            status_callback("processing", f"Sao chép ({percentage:.0f}%)", copied_size / total_size)
 
 def _handle_conflict(dest_path):
     """Generate a new file name to avoid conflict."""
@@ -83,7 +84,7 @@ def copy_verify_delete_file(source_path, destination_folder, should_delete, conf
     # --- Conflict Resolution ---
     if os.path.exists(dest_path):
         if conflict_policy == "Bỏ Qua":
-            status_callback("success", "Bỏ qua (đã tồn tại)")
+            status_callback("success", "Bỏ qua (đã tồn tại)", 1.0) # Mark as complete
             return True, True # Skipped successfully
         elif conflict_policy == "Đổi Tên":
             dest_path = _handle_conflict(dest_path)
@@ -94,7 +95,7 @@ def copy_verify_delete_file(source_path, destination_folder, should_delete, conf
         _copy_file_with_progress(source_path, dest_path, status_callback)
         
         # 2. Verify
-        status_callback("processing", "Đang xác minh...")
+        status_callback("processing", "Đang xác minh...", None)
         source_hash = _calculate_sha256(source_path)
         dest_hash = _calculate_sha256(dest_path)
         if not (source_hash and dest_hash and source_hash == dest_hash):
@@ -102,14 +103,14 @@ def copy_verify_delete_file(source_path, destination_folder, should_delete, conf
 
         # 3. Delete
         if should_delete:
-            status_callback("processing", "Đang xóa...")
+            status_callback("processing", "Đang xóa...", None)
             os.remove(source_path)
         
-        status_callback("success", "Hoàn thành")
+        status_callback("success", "Hoàn thành", 1.0) # Mark as complete
         return True, False # Processed successfully (not skipped)
 
     except Exception as e:
         error_message = "Lỗi: {}".format(e)
-        status_callback("error", error_message)
+        status_callback("error", error_message, -1.0) # Mark as error
         print("Failed to process {}: {}".format(source_path, e))
         return False, False # Failed (not skipped)

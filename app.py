@@ -6,6 +6,7 @@ import time
 import os
 import sys
 import psutil # Added for disk space check
+import traceback # Import traceback module
 from datetime import datetime
 
 # Import from our new modules
@@ -238,24 +239,24 @@ class AutoCopierApp(ctk.CTk):
         conflict_menu.grid(row=2, column=1, sticky='w', padx=15, pady=(5, 10))
 
         # --- Tab View for Files and Log ---
-        tab_view = ctk.CTkTabview(right_panel, fg_color=config.COLOR_FRAME, corner_radius=15,
+        self.tab_view = ctk.CTkTabview(right_panel, fg_color=config.COLOR_FRAME, corner_radius=15,
                                   segmented_button_selected_color=config.COLOR_ACCENT_SKYBLUE)
-        tab_view.grid(row=2, column=0, sticky='nsew', pady=10)
-        tab_view.add("Danh Sách File")
-        tab_view.add("Nhật Ký Hoạt Động")
+        self.tab_view.grid(row=2, column=0, sticky='nsew', pady=10)
+        self.tab_view.add("Danh Sách File")
+        self.tab_view.add("Nhật Ký Hoạt Động")
         
-        tree_frame = ctk.CTkFrame(tab_view.tab("Danh Sách File"), fg_color="transparent")
+        tree_frame = ctk.CTkFrame(self.tab_view.tab("Danh Sách File"), fg_color="transparent")
         tree_frame.pack(expand=True, fill="both")
 
-        # Create Treeview with a new 'drive' column
-        self.video_tree = ttk.Treeview(tree_frame, columns=("status", "name", "size", "drive"), show="headings")
+        # Create Treeview with a new 'progress' column
+        self.video_tree = ttk.Treeview(tree_frame, columns=("status", "name", "size", "drive", "time", "progress"), show="headings")
         self.video_tree.pack(side="left", fill="both", expand=True)
 
         tree_scroll = ttk.Scrollbar(tree_frame, orient="vertical", command=self.video_tree.yview)
         self.video_tree.configure(yscrollcommand=tree_scroll.set)
         tree_scroll.pack(side="right", fill="y")
 
-        self.log_textbox = ctk.CTkTextbox(tab_view.tab("Nhật Ký Hoạt Động"), state="disabled", fg_color=config.COLOR_EDITOR_BG, wrap="word", corner_radius=0, font=("Courier New", 12))
+        self.log_textbox = ctk.CTkTextbox(self.tab_view.tab("Nhật Ký Hoạt Động"), state="disabled", fg_color=config.COLOR_EDITOR_BG, wrap="word", corner_radius=0, font=("Courier New", 12))
         self.log_textbox.pack(expand=True, fill="both", padx=10, pady=10)
 
         # --- Progress Bar Frame ---
@@ -296,11 +297,15 @@ class AutoCopierApp(ctk.CTk):
         self.video_tree.heading("status", text="Trạng Thái")
         self.video_tree.heading("name", text="Tên Tệp")
         self.video_tree.heading("size", text="Kích Thước")
-        self.video_tree.heading("drive", text="Thiết Bị") # New column
+        self.video_tree.heading("drive", text="Thiết Bị")
+        self.video_tree.heading("time", text="Thời Gian")
+        self.video_tree.heading("progress", text="Tiến Trình")
         self.video_tree.column("status", width=120, anchor='w')
-        self.video_tree.column("name", width=400, anchor='w')
+        self.video_tree.column("name", width=350, anchor='w')
         self.video_tree.column("size", width=100, anchor='center')
-        self.video_tree.column("drive", width=150, anchor='w') # New column config
+        self.video_tree.column("drive", width=120, anchor='w')
+        self.video_tree.column("time", width=80, anchor='center')
+        self.video_tree.column("progress", width=150, anchor='w')
         self.video_tree.tag_configure('pending', foreground=config.COLOR_TEXT)
         self.video_tree.tag_configure('processing', foreground=config.COLOR_STATUS_WARN)
         self.video_tree.tag_configure('success', foreground=config.COLOR_STATUS_SUCCESS)
@@ -434,26 +439,26 @@ class AutoCopierApp(ctk.CTk):
             if widget:
                 self.after(0, lambda w=widget: w.eject_button.configure(state="disabled"))
 
-        self.after(0, self.log_message, f"Bắt đầu quá trình tháo {len(drives_to_eject)} thiết bị...", level="INFO")
+        self.after(0, lambda: self.log_message(f"Bắt đầu quá trình tháo {len(drives_to_eject)} thiết bị...", level="INFO"))
 
         success_count = 0
         error_details = []
 
         for mountpoint in drives_to_eject:
-            self.after(0, self.log_message, f"Đang tháo {get_drive_name_from_mountpoint(mountpoint)}...", level="INFO")
+            self.after(0, lambda: self.log_message(f"Đang tháo {get_drive_name_from_mountpoint(mountpoint)}...", level="INFO"))
             drive_info = self.detected_drives.get(mountpoint)
             if not drive_info:
                 error_details.append(f" - {get_drive_name_from_mountpoint(mountpoint)}: Không tìm thấy thông tin thiết bị.")
-                self.after(0, self.log_message, f"Lỗi khi tháo {get_drive_name_from_mountpoint(mountpoint)}: Không tìm thấy thông tin.", level="ERROR")
-                continue
+                self.after(0, lambda: self.log_message(f"Lỗi khi tháo {get_drive_name_from_mountpoint(mountpoint)}: Không tìm thấy thông tin.", level="ERROR"))
+                continue # Skip this file
             
             success, message = drive_manager.eject_drive(drive_info['device'])
             if success:
                 success_count += 1
-                self.after(0, self.log_message, f"Đã tháo thành công {get_drive_name_from_mountpoint(mountpoint)}.", level="SUCCESS")
+                self.after(0, lambda: self.log_message(f"Đã tháo thành công {get_drive_name_from_mountpoint(mountpoint)}.", level="SUCCESS"))
             else:
                 error_details.append(f" - {get_drive_name_from_mountpoint(mountpoint)}: {message}")
-                self.after(0, self.log_message, f"Lỗi khi tháo {get_drive_name_from_mountpoint(mountpoint)}: {message}", level="ERROR")
+                self.after(0, lambda: self.log_message(f"Lỗi khi tháo {get_drive_name_from_mountpoint(mountpoint)}: {message}", level="ERROR"))
         
         # Final Report
         report_message = f"Hoàn tất quá trình tháo thiết bị.\n\nThành công: {success_count}/{len(drives_to_eject)}"
@@ -511,7 +516,7 @@ class AutoCopierApp(ctk.CTk):
 
             # After the loop, finish the scan on the widget
             if drive_path in self.drive_widgets:
-                self.after(0, self.drive_widgets[drive_path].finish_scan)
+                self.after(0, lambda w=self.drive_widgets[drive_path]: w.finish_scan())
             
             # After a short delay, select all the newly added items
             if new_item_ids:
@@ -524,7 +529,8 @@ class AutoCopierApp(ctk.CTk):
 
         except Exception as e:
             print(f"Error in search thread for {drive_path}: {e}")
-            self.after(0, self.log_message, f"Lỗi khi quét file trên {drive_path}: {e}", level="ERROR")
+            # Use lambda to fix TypeError
+            self.after(0, lambda: self.log_message(f"Lỗi khi quét file trên {drive_path}: {e}", level="ERROR"))
 
     def select_all_videos(self):
         """Selects all video items in the treeview."""
@@ -567,7 +573,8 @@ class AutoCopierApp(ctk.CTk):
     def _auto_process_thread(self, mountpoint):
         """The actual worker thread for the automatic process. No UI updates here."""
         try:
-            self.after(0, self.log_message, f"Tự động: Đang quét {mountpoint}...", level="INFO")
+            # Use lambda to fix TypeError
+            self.after(0, lambda: self.log_message(f"Tự động: Đang quét {mountpoint}...", level="INFO"))
             extensions = self.file_extensions.get()
             
             videos_to_process = list(file_operations.find_files_on_drive(mountpoint, extensions))
@@ -577,15 +584,18 @@ class AutoCopierApp(ctk.CTk):
                 self.after(0, widget.finish_scan)
 
             if not videos_to_process:
-                self.after(0, self.log_message, f"Tự động: Không tìm thấy file phù hợp trên {mountpoint}.", level="INFO")
+                # Use lambda to fix TypeError
+                self.after(0, lambda: self.log_message(f"Tự động: Không tìm thấy file phù hợp trên {mountpoint}.", level="INFO"))
                 return
 
-            self.after(0, self.log_message, f"Tự động: Tìm thấy {len(videos_to_process)} file trên {mountpoint}. Bắt đầu sao chép.", level="INFO")
+            # Use lambda to fix TypeError
+            self.after(0, lambda: self.log_message(f"Tự động: Tìm thấy {len(videos_to_process)} file trên {mountpoint}. Bắt đầu sao chép.", level="INFO"))
             
             self.start_copy_process(mountpoint, videos_to_process, item_ids=None)
         except Exception as e:
             print(f"Error in auto process thread for {mountpoint}: {e}")
-            self.after(0, self.log_message, f"Lỗi khi tự động quét file trên {mountpoint}: {e}", level="ERROR")
+            # Use lambda to fix TypeError
+            self.after(0, lambda: self.log_message(f"Lỗi khi tự động quét file trên {mountpoint}: {e}", level="ERROR"))
 
     def start_copy_process(self, mountpoint, videos_to_process, item_ids):
         """Generic copy process starter for both auto and manual modes."""
@@ -598,8 +608,9 @@ class AutoCopierApp(ctk.CTk):
         files_to_copy_paths = [v['path'] for v in videos_to_process]
         required_space = file_operations.get_required_space(files_to_copy_paths)
         
-        drive_name = get_drive_name_from_mountpoint(mountpoint)
-        final_destination = os.path.join(destination_root, drive_name)
+        # The logic to pre-create a destination folder here was flawed for manual mode
+        # and redundant for automatic mode. The worker thread already handles 
+        # creating the correct subdirectories for each file. This logic is removed.
         
         if not file_operations.has_enough_space(destination_root, required_space):
             messagebox.showerror("Thiếu Dung Lượng", 
@@ -609,11 +620,8 @@ class AutoCopierApp(ctk.CTk):
                                      psutil.disk_usage(destination_root).free / (1024**3)))
             return
 
-        try:
-            os.makedirs(final_destination, exist_ok=True)
-        except OSError as e:
-            messagebox.showerror("Lỗi", "Không thể tạo thư mục đích:\n{}".format(e))
-            return
+        # Folder creation is now handled reliably inside the worker thread for each file.
+        # This prevents the creation of a useless "Manual" folder and potential conflicts.
         
         if self.delete_after_copy.get():
             # For manual mode, confirm with the number of files from selected drives.
@@ -641,69 +649,98 @@ class AutoCopierApp(ctk.CTk):
 
     def _copy_process_thread(self, videos, destination_root, should_delete, item_ids, process_id):
         """The main worker thread for copying, verifying, and deleting."""
-        final_results = {"success": 0, "error": 0, "skipped": 0}
-        conflict_policy = self.conflict_policy.get()
-        total_files = len(videos)
-        
-        is_manual_mode = (item_ids is not None)
+        try:
+            final_results = {"success": 0, "error": 0, "skipped": 0}
+            conflict_policy = self.conflict_policy.get()
+            total_files = len(videos)
+            
+            is_manual_mode = (item_ids is not None)
 
-        for i, video_info in enumerate(videos):
-            source_path = video_info['path']
-            file_name = os.path.basename(source_path)
+            for i, video_info in enumerate(videos):
+                start_time = time.time()
+                source_path = video_info['path']
+                file_name = os.path.basename(source_path)
 
-            # Determine the correct subfolder (drive name)
-            if is_manual_mode:
-                # In manual mode, we get the drive mountpoint from the video_info dictionary
-                # which was stored when the file list was created.
-                drive_mountpoint = video_info.get('drive', 'Unknown_Drive')
-                drive_name = get_drive_name_from_mountpoint(drive_mountpoint)
-            else:
-                # In auto mode, the process_id is the mountpoint
-                drive_name = get_drive_name_from_mountpoint(process_id)
+                # Determine the correct subfolder (drive name)
+                if is_manual_mode:
+                    drive_mountpoint = video_info.get('drive', 'Unknown_Drive')
+                    drive_name = get_drive_name_from_mountpoint(drive_mountpoint)
+                else:
+                    drive_name = get_drive_name_from_mountpoint(process_id)
 
-            final_destination_folder = os.path.join(destination_root, drive_name)
-            try:
-                os.makedirs(final_destination_folder, exist_ok=True)
-            except OSError as e:
-                self.after(0, self.log_message, f"Không thể tạo thư mục {final_destination_folder}: {e}", "ERROR")
-                final_results["error"] += 1
-                continue # Skip this file
+                final_destination_folder = os.path.join(destination_root, drive_name)
+                try:
+                    os.makedirs(final_destination_folder, exist_ok=True)
+                except OSError as e:
+                    self.after(0, lambda: self.log_message(f"Không thể tạo thư mục {final_destination_folder}: {e}", "ERROR"))
+                    final_results["error"] += 1
+                    continue # Skip this file
 
-            # Update overall progress
-            progress_value = (i + 1) / total_files
-            progress_text = f"Đang xử lý {i+1}/{total_files}: {file_name}"
-            self.after(0, lambda p=progress_value: self.progress_bar.set(p))
-            self.after(0, lambda t=progress_text: self.progress_status_label.configure(text=t))
+                # Update overall progress
+                progress_value = (i + 1) / total_files
+                progress_text = f"Đang xử lý {i+1}/{total_files}: {file_name}"
+                self.after(0, lambda p=progress_value: self.progress_bar.set(p))
+                self.after(0, lambda t=progress_text: self.progress_status_label.configure(text=t))
 
-            # Define status callback
-            def status_callback(status_key, status_text):
+                # Define status callback to handle detailed progress
+                def status_callback(status_key, status_text, progress_value=None):
+                    if is_manual_mode:
+                        item_id = item_ids[i]
+                        if self.video_tree.exists(item_id):
+                            self.after(0, self.update_item_status, item_id, status_text, status_key, progress_value)
+                    # Use a lambda to correctly pass the keyword argument to log_message via self.after
+                    self.after(0, lambda: self.log_message(f"{file_name}: {status_text}", level=status_key.upper()))
+
+                # Perform the core operation
+                try:
+                    success, skipped = file_operations.copy_verify_delete_file(source_path, final_destination_folder, should_delete, conflict_policy, status_callback)
+                    if success:
+                        final_results["success"] += 1
+                        if skipped:
+                            final_results["skipped"] += 1
+                    else:
+                        final_results["error"] += 1
+                except Exception as e:
+                    final_results["error"] += 1
+                    status_callback("error", f"Lỗi nghiêm trọng: {e}")
+                
+                # After processing, calculate duration and update UI
+                duration = time.time() - start_time
                 if is_manual_mode:
                     item_id = item_ids[i]
-                    # Check if the item still exists in the treeview
                     if self.video_tree.exists(item_id):
-                        self.after(0, self.update_item_status, item_id, status_text, status_key)
-                self.after(0, self.log_message, f"{file_name}: {status_text}", level=status_key.upper())
-
-            # Perform the core operation
-            try:
-                success, skipped = file_operations.copy_verify_delete_file(source_path, final_destination_folder, should_delete, conflict_policy, status_callback)
-                if success:
-                    final_results["success"] += 1
-                    if skipped:
-                        final_results["skipped"] += 1
-                else:
-                    final_results["error"] += 1
-            except Exception as e:
-                final_results["error"] += 1
-                status_callback("error", f"Lỗi nghiêm trọng: {e}")
+                        self.after(0, self.update_item_time, item_id, duration)
+            
+            # --- Finalize ---
+            report_id = get_drive_name_from_mountpoint(process_id) if not is_manual_mode else "các file đã chọn"
+            # Schedule the single finalization function to run on the main thread
+            self.after(0, self._finalize_copy_process, final_results, report_id)
         
-        # --- Finalize ---
-        report_id = get_drive_name_from_mountpoint(process_id) if not is_manual_mode else "các file đã chọn"
-        self.after(0, self.show_final_report, final_results, report_id)
-        self.after(0, lambda: self.progress_frame.grid_remove()) # Hide progress bar
-        self.after(0, self.log_message, f"Hoàn tất quá trình cho {report_id}.")
-        self.after(0, self._update_ui_states)
+        except Exception as e:
+            tb_str = traceback.format_exc()
+            self.after(0, self._show_thread_error, "_copy_process_thread", tb_str)
 
+    def _finalize_copy_process(self, results, drive_name):
+        """Handles all UI updates after a copy process is complete."""
+        # Hide progress bar and update status
+        self.progress_frame.grid_remove()
+        self.log_message(f"Hoàn tất quá trình cho {drive_name}.")
+        self.log_message(f"Báo cáo: Thành công: {results['success'] - results['skipped']}, Bỏ qua: {results['skipped']}, Lỗi: {results['error']}", "INFO")
+
+        # Show the final pop-up report after a small delay to prevent UI conflicts on macOS
+        self.after(100, lambda: self.show_final_report(results, drive_name))
+
+        # Switch view to the file list so the user can see the detailed status
+        self.tab_view.set("Danh Sách File")
+
+        # Bring the window to the front to make sure the user sees the result
+        self.lift()
+        self.attributes('-topmost', True)
+        self.after(200, lambda: self.attributes('-topmost', False))
+        
+        # Update button states
+        self._update_ui_states()
+        
     # --- UI Helpers ---
 
     def add_video_to_list(self, video_data):
@@ -717,7 +754,9 @@ class AutoCopierApp(ctk.CTk):
                 "Sẵn sàng",
                 os.path.basename(video_data['path']),
                 f"{size_mb:.2f} MB",
-                drive_name
+                drive_name,
+                "", # Placeholder for time
+                "" # Placeholder for progress
             ))
 
             self.video_item_map[item_id] = { "path": video_data['path'], "drive": video_data['drive'] }
@@ -727,6 +766,38 @@ class AutoCopierApp(ctk.CTk):
         except Exception as e:
             print(f"Error adding video to list for {video_data.get('path', 'N/A')}: {e}")
             return None
+
+    def update_item_time(self, item_id, duration_seconds):
+        """Updates the time column for a specific item in the treeview."""
+        try:
+            self.video_tree.set(item_id, "time", f"{duration_seconds:.2f} s")
+        except tk.TclError:
+            print(f"Could not update time for item {item_id} (it may have been deleted).")
+
+    def update_item_status(self, item_id, status_text, tag, progress_value=None):
+        """Updates the status and progress bar for a specific item."""
+        try:
+            # Update status text
+            final_text = status_text
+            if tag == 'success' and 'Hoàn thành' in status_text:
+                final_text = f"✔ {status_text}"
+            self.video_tree.set(item_id, "status", final_text)
+
+            # Update progress bar visualization
+            if progress_value is not None:
+                if progress_value == -1.0: # Error case
+                    progress_bar = "[!!! LỖI !!!]"
+                else:
+                    bar_length = 10
+                    filled_length = int(bar_length * progress_value)
+                    bar = '█' * filled_length + '-' * (bar_length - filled_length)
+                    progress_bar = f"[{bar}] {progress_value*100:.0f}%"
+                self.video_tree.set(item_id, "progress", progress_bar)
+            
+            # Update color tag
+            self.video_tree.item(item_id, tags=(tag,))
+        except tk.TclError:
+            print(f"Could not update status for item {item_id} (it may have been deleted).")
 
     def show_no_videos_found(self, drive_path):
         self.log_message(f"Không tìm thấy file video nào phù hợp trên {get_drive_name_from_mountpoint(drive_path)}.", "WARN")
@@ -744,13 +815,11 @@ class AutoCopierApp(ctk.CTk):
         self.video_item_map.clear()
         self._update_ui_states()
 
-    def update_item_status(self, item_id, status_text, tag):
-        try:
-            final_text = status_text
-            if tag == 'success' and 'Hoàn thành' in status_text:
-                final_text = f"✔ {status_text}"
-
-            self.video_tree.set(item_id, "status", final_text)
-            self.video_tree.item(item_id, tags=(tag,))
-        except tk.TclError:
-            print(f"Could not update status for item {item_id} (it may have been deleted).")
+    def _show_thread_error(self, thread_name, error_details):
+        """Displays a critical error from a background thread in a messagebox."""
+        self.log_message(f"Lỗi nghiêm trọng trong luồng {thread_name}: {error_details}", "CRITICAL")
+        # Schedule the messagebox to avoid calling it during a UI draw event on macOS
+        self.after(100, lambda: messagebox.showerror(f"Lỗi Luồng {thread_name}", 
+                             f"Đã xảy ra lỗi không mong muốn. Vui lòng báo cáo lỗi này:\n\n{error_details}"))
+        # Also hide the progress bar to signal completion
+        self.progress_frame.grid_remove()
