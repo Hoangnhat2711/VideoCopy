@@ -28,7 +28,7 @@ def get_drive_name_from_mountpoint(mountpoint):
     return name if name else "Unknown_Drive"
 
 class DriveWidget(ctk.CTkFrame):
-    def __init__(self, master, mountpoint, description, selection_callback, eject_callback):
+    def __init__(self, master, mountpoint, description, selection_callback):
         super().__init__(master, fg_color="transparent")
         self.mountpoint = mountpoint
         self.is_selected = ctk.BooleanVar(value=False)
@@ -48,34 +48,24 @@ class DriveWidget(ctk.CTkFrame):
         self.description_label = ctk.CTkLabel(self, text=description, anchor="w", text_color="gray")
         self.description_label.grid(row=1, column=1, sticky="ew", padx=5, pady=(0,5))
 
-        # Eject button (initially hidden)
-        self.eject_button = ctk.CTkButton(self, text="Tháo", width=40, height=20, text_color=config.COLOR_TEXT_HEADER,
-                                          fg_color=config.COLOR_ACCENT_SKYBLUE, command=lambda: eject_callback(self.mountpoint))
-        self.eject_button.grid(row=0, column=2, rowspan=2, padx=(0, 10))
-        self.eject_button.grid_remove() # Hide it
-
         # Progress bar
         self.progress_bar = ctk.CTkProgressBar(self, height=5, corner_radius=5, fg_color=config.COLOR_BG)
         self.progress_bar.set(0)
-        self.progress_bar.grid(row=2, column=0, columnspan=3, sticky="ew", padx=10, pady=(0, 5))
+        self.progress_bar.grid(row=2, column=0, columnspan=2, sticky="ew", padx=10, pady=(0, 5))
 
     def on_toggle(self):
         is_selected = self.is_selected.get()
-        if is_selected:
-            self.eject_button.grid() # Show eject button
-        else:
-            self.eject_button.grid_remove() # Hide eject button
         self.selection_callback(self.mountpoint, is_selected)
 
     def start_scan(self):
         self.progress_bar.configure(progress_color=config.COLOR_ACCENT_SKYBLUE)
-        self.eject_button.configure(state="disabled")
+        self.checkbox.configure(state="disabled")
         self.progress_bar.start()
 
     def finish_scan(self):
         self.progress_bar.stop()
         self.progress_bar.configure(progress_color=config.COLOR_STATUS_SUCCESS)
-        self.eject_button.configure(state="normal")
+        self.checkbox.configure(state="normal")
         self.progress_bar.set(1)
 
     def reset(self):
@@ -83,7 +73,12 @@ class DriveWidget(ctk.CTkFrame):
         self.progress_bar.stop()
         self.progress_bar.configure(progress_color=config.COLOR_ACCENT_SKYBLUE)
         self.progress_bar.set(0)
-        self.eject_button.grid_remove()
+    
+    def show_ejected_status(self):
+        self.checkbox.configure(state="disabled")
+        self.description_label.configure(text="✔ Đã tháo an toàn", text_color=config.COLOR_STATUS_SUCCESS)
+        self.progress_bar.set(1)
+        self.progress_bar.configure(progress_color=config.COLOR_STATUS_SUCCESS)
 
 class AutoCopierApp(ctk.CTk):
     def __init__(self):
@@ -278,7 +273,7 @@ class AutoCopierApp(ctk.CTk):
         self.select_all_button.grid(row=0, column=0, padx=10, pady=10)
         self.deselect_all_button = ctk.CTkButton(action_frame, text="Bỏ Chọn Tất Cả", command=self.deselect_all_videos, state="disabled", text_color=config.COLOR_TEXT_HEADER)
         self.deselect_all_button.grid(row=0, column=1, padx=5, pady=10)
-        self.delete_checkbox = ctk.CTkCheckBox(action_frame, text="Tự động xóa file gốc", variable=self.delete_after_copy, fg_color=config.COLOR_ACCENT_GREEN, hover_color=config.COLOR_ACCENT_GREEN)
+        self.delete_checkbox = ctk.CTkCheckBox(action_frame, text="Xóa sạch thẻ sau khi chép", variable=self.delete_after_copy, fg_color=config.COLOR_ACCENT_GREEN, hover_color=config.COLOR_ACCENT_GREEN)
         self.delete_checkbox.grid(row=0, column=2, padx=20, pady=10)
         self.copy_button = ctk.CTkButton(action_frame, text="Sao Chép Thủ Công", command=self.start_manual_copy, state="disabled", fg_color=config.COLOR_ACCENT_ORANGE, font=ctk.CTkFont(weight="bold"), text_color=config.COLOR_TEXT_HEADER)
         self.copy_button.grid(row=0, column=4, sticky='e', padx=10, pady=10)
@@ -383,7 +378,7 @@ class AutoCopierApp(ctk.CTk):
                 drive_label = get_drive_name_from_mountpoint(mountpoint)
                 # A simple description from the drive label and file system type
                 description = f"{drive_label} ({drive.fstype})" if drive_label and drive_label != "/" else f"{drive.device} ({drive.fstype})"
-                widget = DriveWidget(self.drive_list_frame, mountpoint, description, self.on_drive_selection_changed, self.eject_active_drive)
+                widget = DriveWidget(self.drive_list_frame, mountpoint, description, self.on_drive_selection_changed)
                 widget.pack(fill='x', expand=True, pady=(0, 5))
                 self.drive_widgets[mountpoint] = widget
 
@@ -401,7 +396,9 @@ class AutoCopierApp(ctk.CTk):
                 widget = self.drive_widgets.get(mountpoint)
                 if widget:
                     widget.start_scan()
-                self.list_videos_from_drive(mountpoint)
+                # self.list_videos_from_drive(mountpoint)
+                # Use a thread to avoid blocking the UI, especially if multiple drives are selected quickly
+                threading.Thread(target=self.list_videos_from_drive, args=(mountpoint,), daemon=True).start()
                 # self.eject_button.configure(state="normal") # Enable eject if any drive is selected - REMOVED
         else:
             if mountpoint in self.selected_drives:
@@ -413,72 +410,57 @@ class AutoCopierApp(ctk.CTk):
         
         self._update_ui_states()
 
-    def eject_active_drive(self, mountpoint_to_eject):
+    def _start_eject_drive(self, mountpoint_to_eject):
         drive_name = get_drive_name_from_mountpoint(mountpoint_to_eject)
-        confirmation = messagebox.askyesno("Xác Nhận Tháo Thiết Bị", 
-                                           f"Bạn có chắc chắn muốn tháo an toàn thiết bị {drive_name} không?",
-                                           icon='warning')
         
-        if not confirmation:
-            self.log_message(f"Đã hủy thao tác tháo {drive_name}.", level="INFO")
-            return
+        # No more confirmation, just log and eject.
+        self.log_message(f"Bắt đầu tự động tháo {drive_name}.", level="INFO")
         
         # Check if drive still exists before trying to eject
         if mountpoint_to_eject not in self.detected_drives:
-            messagebox.showerror("Lỗi", f"Thiết bị {drive_name} không còn được kết nối.")
+            self.log_message(f"Không thể tháo {drive_name}, thiết bị không còn được kết nối.", "WARN")
             self.update_drive_list()
             return
 
-        threading.Thread(target=self._eject_drives_thread, args=([mountpoint_to_eject],), daemon=True).start()
+        threading.Thread(target=self._eject_drive_thread, args=(mountpoint_to_eject,), daemon=True).start()
 
-    def _eject_drives_thread(self, drives_to_eject):
-        """Worker thread for ejecting a list of drives (now usually just one)."""
-        # Disable the specific widget's eject button
-        for mountpoint in drives_to_eject:
-            widget = self.drive_widgets.get(mountpoint)
+    def _eject_drive_thread(self, mountpoint):
+        """Worker thread for ejecting a single drive."""
+        widget = self.drive_widgets.get(mountpoint)
+        drive_name = get_drive_name_from_mountpoint(mountpoint)
+
+        self.after(0, lambda: self.log_message(f"Đang tháo {drive_name}...", level="INFO"))
+        drive_info = self.detected_drives.get(mountpoint)
+        
+        if not drive_info:
+            self.after(0, lambda: self.log_message(f"Lỗi khi tháo {drive_name}: Không tìm thấy thông tin thiết bị.", level="ERROR"))
+            return
+        
+        success, message = drive_manager.eject_drive(drive_info['device'])
+        
+        if success:
+            self.after(0, lambda: self.log_message(f"Đã tháo thành công {drive_name}.", level="SUCCESS"))
             if widget:
-                self.after(0, lambda w=widget: w.eject_button.configure(state="disabled"))
-
-        self.after(0, lambda: self.log_message(f"Bắt đầu quá trình tháo {len(drives_to_eject)} thiết bị...", level="INFO"))
-
-        success_count = 0
-        error_details = []
-
-        for mountpoint in drives_to_eject:
-            self.after(0, lambda: self.log_message(f"Đang tháo {get_drive_name_from_mountpoint(mountpoint)}...", level="INFO"))
-            drive_info = self.detected_drives.get(mountpoint)
-            if not drive_info:
-                error_details.append(f" - {get_drive_name_from_mountpoint(mountpoint)}: Không tìm thấy thông tin thiết bị.")
-                self.after(0, lambda: self.log_message(f"Lỗi khi tháo {get_drive_name_from_mountpoint(mountpoint)}: Không tìm thấy thông tin.", level="ERROR"))
-                continue # Skip this file
-            
-            success, message = drive_manager.eject_drive(drive_info['device'])
-            if success:
-                success_count += 1
-                self.after(0, lambda: self.log_message(f"Đã tháo thành công {get_drive_name_from_mountpoint(mountpoint)}.", level="SUCCESS"))
-            else:
-                error_details.append(f" - {get_drive_name_from_mountpoint(mountpoint)}: {message}")
-                self.after(0, lambda: self.log_message(f"Lỗi khi tháo {get_drive_name_from_mountpoint(mountpoint)}: {message}", level="ERROR"))
+                # Update the specific widget to show its final ejected status
+                self.after(0, widget.show_ejected_status)
+        else:
+            self.after(0, lambda: self.log_message(f"Lỗi khi tháo {drive_name}: {message}", level="ERROR"))
         
-        # Final Report
-        report_message = f"Hoàn tất quá trình tháo thiết bị.\n\nThành công: {success_count}/{len(drives_to_eject)}"
-        if error_details:
-            report_message += "\n\nChi tiết lỗi:\n" + "\n".join(error_details)
-        
-        self.after(0, messagebox.showinfo, "Báo Cáo Tháo Thiết Bị", report_message)
-        self.after(0, self.update_drive_list)
-        self.after(0, self._update_ui_states)
+        # The main monitoring thread will handle the drive disappearing from the list.
+        # We can trigger a manual refresh to speed it up.
+        self.after(1000, self.update_drive_list)
 
 
     def list_videos_from_drive(self, drive_path):
         """Initiates the video search for a specific drive."""
+        widget = self.drive_widgets.get(drive_path)
+        if not widget: return # Should not happen if drive_path is valid
+
         self.log_message(f"Đang tìm kiếm file trên {get_drive_name_from_mountpoint(drive_path)}...", level="INFO")
         # Check if drive still exists before starting the thread
         if drive_path not in self.detected_drives:
             self.log_message(f"Hủy quét: {get_drive_name_from_mountpoint(drive_path)} không còn được kết nối.", "WARN")
-            widget = self.drive_widgets.get(drive_path)
-            if widget:
-                widget.finish_scan() # Mark as 'done' even if it disappeared
+            widget.finish_scan() # Mark as 'done' even if it disappeared
             return
         threading.Thread(target=self._search_videos_thread, args=(drive_path,), daemon=True).start()
     
@@ -553,13 +535,38 @@ class AutoCopierApp(ctk.CTk):
             messagebox.showwarning("Chưa chọn file", "Vui lòng chọn ít nhất một file để sao chép.")
             return
 
-        videos_to_process = [self.video_item_map[item_id] for item_id in selected_item_ids]
-        
         if not self.destination_path.get():
             messagebox.showwarning("Chưa chọn đích", "Vui lòng chọn thư mục đích trước khi sao chép.")
             return
+        
+        # Group videos by the drive they belong to
+        videos_by_drive = {}
+        item_ids_by_drive = {}
+        for item_id in selected_item_ids:
+            video_info = self.video_item_map.get(item_id)
+            if not video_info: continue
+            
+            mountpoint = video_info['drive']
+            if mountpoint not in videos_by_drive:
+                videos_by_drive[mountpoint] = []
+                item_ids_by_drive[mountpoint] = []
+            
+            videos_by_drive[mountpoint].append(video_info)
+            item_ids_by_drive[mountpoint].append(item_id)
 
-        self.start_copy_process('Manual', videos_to_process, selected_item_ids)
+        # A single confirmation for all drives if wiping is enabled
+        if self.delete_after_copy.get():
+            num_drives = len(videos_by_drive)
+            drive_names = ", ".join([get_drive_name_from_mountpoint(mp) for mp in videos_by_drive.keys()])
+            confirm_message = (f"Bạn có chắc chắn muốn XÓA VĨNH VIỄN TOÀN BỘ DỮ LIỆU "
+                               f"trên {num_drives} thẻ ({drive_names}) sau khi sao chép thành công không?")
+            if not messagebox.askyesno("Xác Nhận Xóa Sạch Thẻ", confirm_message, icon='warning'):
+                return
+
+        # Start a separate copy process for each drive
+        for mountpoint, videos in videos_by_drive.items():
+            item_ids = item_ids_by_drive[mountpoint]
+            self.start_copy_process(mountpoint, videos, item_ids)
 
 
     def start_auto_process(self, mountpoint):
@@ -623,19 +630,11 @@ class AutoCopierApp(ctk.CTk):
         # Folder creation is now handled reliably inside the worker thread for each file.
         # This prevents the creation of a useless "Manual" folder and potential conflicts.
         
-        if self.delete_after_copy.get():
-            # For manual mode, confirm with the number of files from selected drives.
-            # For auto mode, confirm with the drive name.
-            confirm_message = ""
-            if mountpoint == "Manual":
-                num_files = len(videos_to_process)
-                confirm_message = f"Bạn có chắc chắn muốn XÓA VĨNH VIỄN {num_files} file đã chọn sau khi sao chép thành công không?"
-            else:
-                drive_name = get_drive_name_from_mountpoint(mountpoint)
-                confirm_message = f"Bạn có chắc chắn muốn XÓA VĨNH VIỄN các file gốc trên thẻ {drive_name} sau khi sao chép thành công không?"
-
-            if not messagebox.askyesno("Xác Nhận Xóa", confirm_message, icon='warning'):
-                return
+        # Confirmation is now handled in the calling functions (start_manual_copy)
+        # For auto-mode, we assume consent if the wipe checkbox is ticked.
+        if self.is_auto_mode.get() and self.delete_after_copy.get():
+             drive_name = get_drive_name_from_mountpoint(mountpoint)
+             self.log_message(f"Cảnh báo: Thẻ {drive_name} sẽ bị xóa sạch sau khi sao chép.", "WARN")
 
         # Show progress bar
         self.progress_frame.grid()
@@ -647,7 +646,7 @@ class AutoCopierApp(ctk.CTk):
                          args=(videos_to_process, destination_root, self.delete_after_copy.get(), item_ids, mountpoint), 
                          daemon=True).start()
 
-    def _copy_process_thread(self, videos, destination_root, should_delete, item_ids, process_id):
+    def _copy_process_thread(self, videos, destination_root, should_wipe, item_ids, process_id):
         """The main worker thread for copying, verifying, and deleting."""
         try:
             final_results = {"success": 0, "error": 0, "skipped": 0}
@@ -662,11 +661,8 @@ class AutoCopierApp(ctk.CTk):
                 file_name = os.path.basename(source_path)
 
                 # Determine the correct subfolder (drive name)
-                if is_manual_mode:
-                    drive_mountpoint = video_info.get('drive', 'Unknown_Drive')
-                    drive_name = get_drive_name_from_mountpoint(drive_mountpoint)
-                else:
-                    drive_name = get_drive_name_from_mountpoint(process_id)
+                # In our new logic, process_id is always the mountpoint
+                drive_name = get_drive_name_from_mountpoint(process_id)
 
                 final_destination_folder = os.path.join(destination_root, drive_name)
                 try:
@@ -685,15 +681,17 @@ class AutoCopierApp(ctk.CTk):
                 # Define status callback to handle detailed progress
                 def status_callback(status_key, status_text, progress_value=None):
                     if is_manual_mode:
-                        item_id = item_ids[i]
-                        if self.video_tree.exists(item_id):
-                            self.after(0, self.update_item_status, item_id, status_text, status_key, progress_value)
+                        # Ensure index is within bounds
+                        if i < len(item_ids):
+                            item_id = item_ids[i]
+                            if self.video_tree.exists(item_id):
+                                self.after(0, self.update_item_status, item_id, status_text, status_key, progress_value)
                     # Use a lambda to correctly pass the keyword argument to log_message via self.after
                     self.after(0, lambda: self.log_message(f"{file_name}: {status_text}", level=status_key.upper()))
 
                 # Perform the core operation
                 try:
-                    success, skipped = file_operations.copy_verify_delete_file(source_path, final_destination_folder, should_delete, conflict_policy, status_callback)
+                    success, skipped = file_operations.copy_and_verify_file(source_path, final_destination_folder, conflict_policy, status_callback)
                     if success:
                         final_results["success"] += 1
                         if skipped:
@@ -707,14 +705,31 @@ class AutoCopierApp(ctk.CTk):
                 # After processing, calculate duration and update UI
                 duration = time.time() - start_time
                 if is_manual_mode:
-                    item_id = item_ids[i]
-                    if self.video_tree.exists(item_id):
-                        self.after(0, self.update_item_time, item_id, duration)
+                    if i < len(item_ids):
+                        item_id = item_ids[i]
+                        if self.video_tree.exists(item_id):
+                            self.after(0, self.update_item_time, item_id, duration)
             
             # --- Finalize ---
-            report_id = get_drive_name_from_mountpoint(process_id) if not is_manual_mode else "các file đã chọn"
+            all_files_processed_successfully = final_results["error"] == 0
+            mountpoint = process_id # process_id is the mountpoint for the current task
+            drive_name_for_report = get_drive_name_from_mountpoint(mountpoint)
+
+            # If all files were copied without errors, proceed to wipe and/or eject
+            if all_files_processed_successfully:
+                if should_wipe:
+                    def wipe_status_callback(status_key, status_text, progress_value=None):
+                        self.after(0, lambda: self.log_message(f"Xóa thẻ {drive_name_for_report}: {status_text}", level=status_key.upper()))
+                    
+                    self.after(0, lambda: self.log_message(f"Bắt đầu xóa sạch thẻ {drive_name_for_report}...", "INFO"))
+                    wipe_success, wipe_message = file_operations.wipe_drive_data(mountpoint, wipe_status_callback)
+                    self.after(0, lambda: self.log_message(f"Kết quả xóa thẻ {drive_name_for_report}: {wipe_message}", "SUCCESS" if wipe_success else "ERROR"))
+
+                # Always eject automatically after a successful process for a drive
+                self._start_eject_drive(mountpoint)
+
             # Schedule the single finalization function to run on the main thread
-            self.after(0, self._finalize_copy_process, final_results, report_id)
+            self.after(0, self._finalize_copy_process, final_results, drive_name_for_report)
         
         except Exception as e:
             tb_str = traceback.format_exc()
