@@ -15,7 +15,11 @@ def get_removable_drives():
             # macOS specific check: external drives typically mount under /Volumes
             is_macos_external = (sys.platform == "darwin" and p.mountpoint.startswith('/Volumes/'))
 
-            if is_removable or is_macos_external:
+            # Linux specific check: removable drives often mount under /media or /run/media
+            is_linux_media = (sys.platform.startswith("linux") and 
+                              (p.mountpoint.startswith('/media/') or p.mountpoint.startswith('/run/media/')))
+
+            if is_removable or is_macos_external or is_linux_media:
                 # Basic check to avoid including the root filesystem if it's not caught by other flags
                 if p.mountpoint != '/':
                     drives.append(p)
