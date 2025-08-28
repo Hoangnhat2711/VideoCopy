@@ -104,6 +104,7 @@ class AutoCopierApp(ctk.CTk):
         self.selected_drives = set() # To store mountpoints of selected drives
         self.drive_widgets = {}
         self.monitoring = True
+        self.active_copy_processes = 0 # Counter for ongoing copy tasks
 
         # --- Load and Build ---
         self.load_app_config()
@@ -119,20 +120,32 @@ class AutoCopierApp(ctk.CTk):
     def _update_ui_states(self):
         """Central function to update the state of all interactive widgets."""
         is_auto = self.is_auto_mode.get()
+        is_copying = self.active_copy_processes > 0
+
+        # Disable auto switch if any copy process is running
+        self.mode_switch.configure(state="disabled" if is_copying else "normal")
+
+        # In auto mode, delete checkbox is checked and disabled.
+        # Otherwise, it's normal unless a copy is running.
+        if is_auto:
+            self.delete_checkbox.select()
+            self.delete_checkbox.configure(state="disabled")
+        else:
+            self.delete_checkbox.configure(state="disabled" if is_copying else "normal")
         
-        # Drive selection widgets are disabled in auto mode
+        # Drive selection widgets are disabled in auto mode or if copying
         for widget in self.drive_widgets.values():
-            widget.checkbox.configure(state="disabled" if is_auto else "normal")
+            widget.checkbox.configure(state="disabled" if is_auto or is_copying else "normal")
 
         # File list action buttons state
         has_files_in_list = len(self.video_tree.get_children()) > 0
-        can_select = has_files_in_list and not is_auto
+        can_select = has_files_in_list and not is_auto and not is_copying
         self.select_all_button.configure(state="normal" if can_select else "disabled")
         self.deselect_all_button.configure(state="normal" if can_select else "disabled")
 
         # Copy button state
         has_selection = len(self.video_tree.selection()) > 0
-        can_copy = has_selection and not is_auto
+        can_copy = has_selection and not is_auto and not is_copying
         self.copy_button.configure(state="normal" if can_copy else "disabled")
 
 
@@ -214,8 +227,8 @@ class AutoCopierApp(ctk.CTk):
         mode_frame = ctk.CTkFrame(top_controls_frame, fg_color=config.COLOR_FRAME, corner_radius=15)
         mode_frame.grid(row=0, column=1, sticky='ns', padx=(10,0))
         ctk.CTkLabel(mode_frame, text="Chế Độ", font=ctk.CTkFont(size=14, weight="bold")).pack(padx=15, pady=(10,5), anchor='w')
-        mode_switch = ctk.CTkSwitch(mode_frame, text="Tự Động", variable=self.is_auto_mode, progress_color=config.COLOR_ACCENT_GREEN, command=self.toggle_auto_mode)
-        mode_switch.pack(padx=15, pady=(0,10), anchor='w')
+        self.mode_switch = ctk.CTkSwitch(mode_frame, text="Tự Động", variable=self.is_auto_mode, progress_color=config.COLOR_ACCENT_GREEN, command=self.toggle_auto_mode)
+        self.mode_switch.pack(padx=15, pady=(0,10), anchor='w')
 
         settings_frame = ctk.CTkFrame(right_panel, fg_color=config.COLOR_FRAME, corner_radius=15)
         settings_frame.grid(row=1, column=0, sticky='ew', pady=10)
@@ -260,9 +273,13 @@ class AutoCopierApp(ctk.CTk):
         self.progress_frame.grid_columnconfigure(0, weight=1)
         self.progress_status_label = ctk.CTkLabel(self.progress_frame, text="Sẵn sàng", anchor='w')
         self.progress_status_label.grid(row=0, column=0, sticky='ew', padx=15, pady=5)
+
+        self.progress_speed_label = ctk.CTkLabel(self.progress_frame, text="", anchor='e', text_color="gray")
+        self.progress_speed_label.grid(row=0, column=1, sticky='e', padx=15, pady=5)
+
         self.progress_bar = ctk.CTkProgressBar(self.progress_frame, progress_color=config.COLOR_ACCENT_SKYBLUE)
         self.progress_bar.set(0)
-        self.progress_bar.grid(row=1, column=0, sticky='ew', padx=15, pady=(0, 10))
+        self.progress_bar.grid(row=1, column=0, columnspan=2, sticky='ew', padx=15, pady=(0, 10))
         self.progress_frame.grid_remove() # Hide it initially
 
         # --- Action Buttons ---
@@ -435,7 +452,7 @@ class AutoCopierApp(ctk.CTk):
         if not drive_info:
             self.after(0, lambda: self.log_message(f"Lỗi khi tháo {drive_name}: Không tìm thấy thông tin thiết bị.", level="ERROR"))
             return
-        
+            
         success, message = drive_manager.eject_drive(drive_info['device'])
         
         if success:
@@ -443,8 +460,8 @@ class AutoCopierApp(ctk.CTk):
             if widget:
                 # Update the specific widget to show its final ejected status
                 self.after(0, widget.show_ejected_status)
-        else:
-            self.after(0, lambda: self.log_message(f"Lỗi khi tháo {drive_name}: {message}", level="ERROR"))
+            else:
+                self.after(0, lambda: self.log_message(f"Lỗi khi tháo {drive_name}: {message}", level="ERROR"))
         
         # The main monitoring thread will handle the drive disappearing from the list.
         # We can trigger a manual refresh to speed it up.
@@ -534,11 +551,11 @@ class AutoCopierApp(ctk.CTk):
         if not selected_item_ids:
             messagebox.showwarning("Chưa chọn file", "Vui lòng chọn ít nhất một file để sao chép.")
             return
-
+        
         if not self.destination_path.get():
             messagebox.showwarning("Chưa chọn đích", "Vui lòng chọn thư mục đích trước khi sao chép.")
             return
-        
+
         # Group videos by the drive they belong to
         videos_by_drive = {}
         item_ids_by_drive = {}
@@ -632,15 +649,19 @@ class AutoCopierApp(ctk.CTk):
         
         # Confirmation is now handled in the calling functions (start_manual_copy)
         # For auto-mode, we assume consent if the wipe checkbox is ticked.
-        if self.is_auto_mode.get() and self.delete_after_copy.get():
+        if self.is_auto_mode.get():
              drive_name = get_drive_name_from_mountpoint(mountpoint)
-             self.log_message(f"Cảnh báo: Thẻ {drive_name} sẽ bị xóa sạch sau khi sao chép.", "WARN")
+             if self.delete_after_copy.get():
+                self.log_message(f"Cảnh báo: Thẻ {drive_name} sẽ bị xóa sạch sau khi sao chép.", "WARN")
 
         # Show progress bar
         self.progress_frame.grid()
         self.progress_bar.set(0)
         self.progress_status_label.configure(text="Chuẩn bị sao chép...")
         self.log_message("Bắt đầu quá trình sao chép cho {}...".format(get_drive_name_from_mountpoint(mountpoint) if mountpoint != 'Manual' else 'các file đã chọn'))
+
+        self.active_copy_processes += 1
+        self._update_ui_states()
 
         threading.Thread(target=self._copy_process_thread, 
                          args=(videos_to_process, destination_root, self.delete_after_copy.get(), item_ids, mountpoint), 
@@ -679,15 +700,22 @@ class AutoCopierApp(ctk.CTk):
                 self.after(0, lambda t=progress_text: self.progress_status_label.configure(text=t))
 
                 # Define status callback to handle detailed progress
-                def status_callback(status_key, status_text, progress_value=None):
+                def status_callback(status_key, status_text, progress_value=None, speed_mbps=None):
                     if is_manual_mode:
                         # Ensure index is within bounds
                         if i < len(item_ids):
                             item_id = item_ids[i]
                             if self.video_tree.exists(item_id):
                                 self.after(0, self.update_item_status, item_id, status_text, status_key, progress_value)
-                    # Use a lambda to correctly pass the keyword argument to log_message via self.after
-                    self.after(0, lambda: self.log_message(f"{file_name}: {status_text}", level=status_key.upper()))
+                    
+                    # Update real-time speed label
+                    if speed_mbps is not None:
+                        speed_text = f"{speed_mbps:.2f} MB/s"
+                        self.after(0, lambda: self.progress_speed_label.configure(text=speed_text))
+                    
+                    # Log only key events, not continuous progress updates
+                    if "Sao chép (" not in status_text:
+                        self.after(0, lambda: self.log_message(f"{file_name}: {status_text}", level=status_key.upper()))
 
                 # Perform the core operation
                 try:
@@ -738,7 +766,12 @@ class AutoCopierApp(ctk.CTk):
     def _finalize_copy_process(self, results, drive_name):
         """Handles all UI updates after a copy process is complete."""
         # Hide progress bar and update status
-        self.progress_frame.grid_remove()
+        self.active_copy_processes -= 1
+        
+        # Only hide the main progress bar if all tasks are done
+        if self.active_copy_processes == 0:
+            self.progress_frame.grid_remove()
+        
         self.log_message(f"Hoàn tất quá trình cho {drive_name}.")
         self.log_message(f"Báo cáo: Thành công: {results['success'] - results['skipped']}, Bỏ qua: {results['skipped']}, Lỗi: {results['error']}", "INFO")
 

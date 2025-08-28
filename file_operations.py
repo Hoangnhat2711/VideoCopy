@@ -3,6 +3,7 @@ import shutil
 import time
 from datetime import datetime
 import psutil
+import hashlib
 
 def get_required_space(file_paths):
     """Calculate the total disk space required for a list of files."""
@@ -37,33 +38,53 @@ def find_files_on_drive(drive_path, extensions_str):
                     continue
 
 def _copy_file_with_progress(source_path, dest_path, status_callback):
-    """Copies a file using shutil.copy2 for reliability and reports progress."""
+    """Copies a file and reports progress, including real-time speed."""
     total_size = os.path.getsize(source_path)
     if total_size == 0: # Handle zero-byte files
         shutil.copy2(source_path, dest_path)
-        status_callback("processing", "Sao chép... (100%)", 1.0)
+        status_callback("processing", "Sao chép... (100%)", 1.0, 0.0)
         return
 
-    # shutil.copy2 is generally faster and more reliable
-    # We'll run it in a separate thread to monitor progress, but for simplicity here,
-    # we'll use a simplified progress simulation. For a real app, you might
-    # use a more complex method or accept that shutil doesn't offer native progress.
-    
-    # Let's stick with the manual chunk copy for progress reporting, as it's already implemented.
     copied_size = 0
+    
+    # Variables for speed calculation
+    start_time = time.time()
+    last_update_time = start_time
+    bytes_since_last_update = 0
+
     with open(source_path, 'rb') as fsrc, open(dest_path, 'wb') as fdst:
         while True:
             buf = fsrc.read(1024 * 1024) # Read in 1MB chunks
             if not buf:
                 break
             fdst.write(buf)
-            copied_size += len(buf)
+            
+            chunk_size = len(buf)
+            copied_size += chunk_size
+            bytes_since_last_update += chunk_size
             percentage = copied_size / total_size
-            status_callback("processing", f"Sao chép ({percentage:.0f}%)", percentage)
-    
-    # After copying, copy metadata
+            
+            current_time = time.time()
+            elapsed_since_last_update = current_time - last_update_time
+
+            # Update speed roughly every half a second to avoid flooding the UI thread
+            if elapsed_since_last_update > 0.5:
+                speed_mbps = (bytes_since_last_update / (1024*1024)) / elapsed_since_last_update
+                status_callback("processing", f"Sao chép ({percentage:.0f}%)", percentage, speed_mbps)
+                last_update_time = current_time
+                bytes_since_last_update = 0
+            
+    # Final metadata copy
     shutil.copystat(source_path, dest_path)
 
+def _calculate_checksum(file_path):
+    """Calculates the SHA256 checksum for a file."""
+    sha256_hash = hashlib.sha256()
+    with open(file_path, "rb") as f:
+        # Read and update hash in chunks of 4K
+        for byte_block in iter(lambda: f.read(4096), b""):
+            sha256_hash.update(byte_block)
+    return sha256_hash.hexdigest()
 
 def _handle_conflict(dest_path):
     """Generate a new file name to avoid conflict."""
@@ -85,7 +106,7 @@ def copy_and_verify_file(source_path, destination_folder, conflict_policy, statu
     # --- Conflict Resolution ---
     if os.path.exists(dest_path):
         if conflict_policy == "Bỏ Qua":
-            status_callback("success", "Bỏ qua (đã tồn tại)", 1.0) # Mark as complete
+            status_callback("success", "Bỏ qua (đã tồn tại)", 1.0, 0.0) # Mark as complete
             return True, True # Skipped successfully
         elif conflict_policy == "Đổi Tên":
             dest_path = _handle_conflict(dest_path)
@@ -97,21 +118,29 @@ def copy_and_verify_file(source_path, destination_folder, conflict_policy, statu
         # 1. Copy with progress
         _copy_file_with_progress(source_path, dest_path, status_callback)
         
-        # 2. Lightweight Verify
-        status_callback("processing", "Đang kiểm tra...", None)
+        # 2. Lightweight Verify (Size)
+        status_callback("processing", "Đang kiểm tra (kích thước)...", None, None)
         dest_size = os.path.getsize(dest_path)
         
         if source_size != dest_size:
             raise Exception(f"Lỗi kích thước file (Gốc: {source_size}, Đích: {dest_size})")
 
+        # 3. Robust Verify (Checksum)
+        status_callback("processing", "Đang kiểm tra (checksum)...", None, None)
+        source_checksum = _calculate_checksum(source_path)
+        dest_checksum = _calculate_checksum(dest_path)
+
+        if source_checksum != dest_checksum:
+            raise Exception("Lỗi checksum không khớp, dữ liệu có thể đã bị lỗi.")
+
         # Deletion logic is now handled separately at the drive level.
         
-        status_callback("success", "Hoàn thành", 1.0) # Mark as complete
+        status_callback("success", "Hoàn thành & Đã xác thực", 1.0, 0.0) # Mark as complete
         return True, False # Processed successfully (not skipped)
 
     except Exception as e:
         error_message = "Lỗi: {}".format(e)
-        status_callback("error", error_message, -1.0) # Mark as error
+        status_callback("error", error_message, -1.0, None) # Mark as error
         print("Failed to process {}: {}".format(source_path, e))
         return False, False # Failed (not skipped)
 
