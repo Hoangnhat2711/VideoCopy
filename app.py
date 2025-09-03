@@ -48,10 +48,14 @@ class DriveWidget(ctk.CTkFrame):
         self.description_label = ctk.CTkLabel(self, text=description, anchor="w", text_color="gray")
         self.description_label.grid(row=1, column=1, sticky="ew", padx=5, pady=(0,5))
 
+        # Speed label - new addition
+        self.speed_label = ctk.CTkLabel(self, text="", anchor="e", font=ctk.CTkFont(size=12), text_color=config.COLOR_ACCENT_GREEN)
+        self.speed_label.grid(row=0, column=2, rowspan=2, sticky="e", padx=10)
+
         # Progress bar
         self.progress_bar = ctk.CTkProgressBar(self, height=5, corner_radius=5, fg_color=config.COLOR_BG)
         self.progress_bar.set(0)
-        self.progress_bar.grid(row=2, column=0, columnspan=2, sticky="ew", padx=10, pady=(0, 5))
+        self.progress_bar.grid(row=2, column=0, columnspan=3, sticky="ew", padx=10, pady=(0, 5))
 
     def on_toggle(self):
         is_selected = self.is_selected.get()
@@ -73,12 +77,23 @@ class DriveWidget(ctk.CTkFrame):
         self.progress_bar.stop()
         self.progress_bar.configure(progress_color=config.COLOR_ACCENT_SKYBLUE)
         self.progress_bar.set(0)
+        self.clear_speed() # Also clear speed on reset
     
     def show_ejected_status(self):
         self.checkbox.configure(state="disabled")
         self.description_label.configure(text="✔ Đã tháo an toàn", text_color=config.COLOR_STATUS_SUCCESS)
         self.progress_bar.set(1)
         self.progress_bar.configure(progress_color=config.COLOR_STATUS_SUCCESS)
+        self.clear_speed()
+
+    def update_speed(self, speed_mbps):
+        """Updates the speed label with formatted text."""
+        speed_text = f"{speed_mbps:.1f} MB/s"
+        self.speed_label.configure(text=speed_text)
+
+    def clear_speed(self):
+        """Clears the speed label."""
+        self.speed_label.configure(text="")
 
 class AutoCopierApp(ctk.CTk):
     def __init__(self):
@@ -105,6 +120,7 @@ class AutoCopierApp(ctk.CTk):
         self.drive_widgets = {}
         self.monitoring = True
         self.active_copy_processes = 0 # Counter for ongoing copy tasks
+        self.active_speeds = {} # {process_id: speed_mbps} - For total speed calculation
 
         # --- Load and Build ---
         self.load_app_config()
@@ -180,38 +196,62 @@ class AutoCopierApp(ctk.CTk):
     # --- UI Creation ---
 
     def create_widgets(self):
-        """Build the main application UI."""
+        """Build the main application UI based on the new layout."""
+        # --- Main Grid Configuration ---
+        # Column 0 for the left settings panels
+        # Column 1 for the right settings panels, this column will expand
+        # Row 1 for the file/log lists, this row will expand
         self.grid_columnconfigure(1, weight=1)
-        self.grid_rowconfigure(0, weight=1)
+        self.grid_rowconfigure(1, weight=1)
 
-        self._create_left_panel()
-        self._create_right_panel()
+        # --- Top Panels Frame ---
+        # A container for all the controls at the top
+        top_frame = ctk.CTkFrame(self, fg_color="transparent")
+        top_frame.grid(row=0, column=0, columnspan=2, sticky='ew', padx=15, pady=(15, 0))
+        top_frame.grid_columnconfigure(1, weight=1)
 
-    def _create_left_panel(self):
+        self._create_left_panel(top_frame)
+        self._create_top_right_controls(top_frame)
+
+        # --- Bottom Panels (File List & Log) ---
+        bottom_frame = ctk.CTkFrame(self, fg_color="transparent")
+        bottom_frame.grid(row=1, column=0, columnspan=2, sticky='nsew', padx=15, pady=15)
+        # Configure the grid to have two equally sized, expanding columns
+        bottom_frame.grid_columnconfigure((0, 1), weight=1)
+        bottom_frame.grid_rowconfigure(0, weight=1)
+
+        self._create_file_list_panel(bottom_frame)
+        self._create_log_panel(bottom_frame)
+
+        # --- Progress and Action Frames ---
+        # These are now placed at the bottom of the main window grid
+        self._create_progress_frame()
+        self._create_action_frame()
+
+
+    def _create_left_panel(self, master):
         """Build the left panel for drive management."""
-        left_panel = ctk.CTkFrame(self, fg_color=config.COLOR_FRAME, corner_radius=20, width=250)
-        left_panel.grid(row=0, column=0, sticky='nsew', padx=15, pady=15)
+        left_panel = ctk.CTkFrame(master, fg_color=config.COLOR_FRAME, corner_radius=20, width=350)
+        left_panel.grid(row=0, column=0, sticky='ns', padx=(0, 10), pady=0)
         left_panel.grid_rowconfigure(1, weight=1)
-        left_panel.grid_columnconfigure((0, 1), weight=1)
         left_panel.grid_propagate(False)
         
-        ctk.CTkLabel(left_panel, text="Ổ Đĩa / Thẻ Nhớ", font=ctk.CTkFont(size=16, weight="bold"), text_color=config.COLOR_TEXT_HEADER).grid(row=0, column=0, columnspan=2, padx=10, pady=10, sticky='w')
+        ctk.CTkLabel(left_panel, text="Ổ Đĩa / Thẻ Nhớ", font=ctk.CTkFont(size=16, weight="bold"), text_color=config.COLOR_TEXT_HEADER).pack(padx=10, pady=10, anchor='w')
         
         self.drive_list_frame = ctk.CTkScrollableFrame(left_panel, fg_color="transparent")
-        self.drive_list_frame.grid(row=1, column=0, columnspan=2, sticky='nsew', padx=5)
+        self.drive_list_frame.pack(expand=True, fill='both', padx=5)
 
         refresh_button = ctk.CTkButton(left_panel, text="Làm Mới", command=self.update_drive_list, fg_color=config.COLOR_ACCENT_SKYBLUE, text_color=config.COLOR_TEXT_HEADER)
-        refresh_button.grid(row=2, column=0, columnspan=2, sticky='ew', padx=10, pady=10) # Make it span 2 columns
+        refresh_button.pack(fill='x', padx=10, pady=10)
 
-    def _create_right_panel(self):
-        """Build the right panel for controls and video list."""
-        right_panel = ctk.CTkFrame(self, fg_color="transparent")
-        right_panel.grid(row=0, column=1, sticky='nsew', padx=(0, 15), pady=15)
-        right_panel.grid_rowconfigure(2, weight=1) # Make row for tabs/log expand
-        right_panel.grid_columnconfigure(0, weight=1)
+    def _create_top_right_controls(self, master):
+        """Build the right panel for controls (Destination, Mode, Settings)."""
+        right_controls_panel = ctk.CTkFrame(master, fg_color="transparent")
+        right_controls_panel.grid(row=0, column=1, sticky='ew')
+        right_controls_panel.grid_columnconfigure(0, weight=1)
 
-        # --- Top controls frames (Destination, Mode, Settings) ---
-        top_controls_frame = ctk.CTkFrame(right_panel, fg_color="transparent")
+        # --- Top controls frames (Destination, Mode) ---
+        top_controls_frame = ctk.CTkFrame(right_controls_panel, fg_color="transparent")
         top_controls_frame.grid(row=0, column=0, sticky='ew')
         top_controls_frame.grid_columnconfigure(0, weight=1)
 
@@ -230,8 +270,9 @@ class AutoCopierApp(ctk.CTk):
         self.mode_switch = ctk.CTkSwitch(mode_frame, text="Tự Động", variable=self.is_auto_mode, progress_color=config.COLOR_ACCENT_GREEN, command=self.toggle_auto_mode)
         self.mode_switch.pack(padx=15, pady=(0,10), anchor='w')
 
-        settings_frame = ctk.CTkFrame(right_panel, fg_color=config.COLOR_FRAME, corner_radius=15)
-        settings_frame.grid(row=1, column=0, sticky='ew', pady=10)
+        # --- Settings Frame ---
+        settings_frame = ctk.CTkFrame(right_controls_panel, fg_color=config.COLOR_FRAME, corner_radius=15)
+        settings_frame.grid(row=1, column=0, sticky='ew', pady=(5,0))
         settings_frame.grid_columnconfigure(1, weight=1)
         ctk.CTkLabel(settings_frame, text="Cài Đặt Nâng Cao", font=ctk.CTkFont(size=14, weight="bold")).grid(row=0, column=0, columnspan=3, sticky='w', padx=15, pady=(10,5))
         ctk.CTkLabel(settings_frame, text="Các loại file:").grid(row=1, column=0, sticky='w', padx=15)
@@ -246,15 +287,17 @@ class AutoCopierApp(ctk.CTk):
                                            command=self.save_app_config)
         conflict_menu.grid(row=2, column=1, sticky='w', padx=15, pady=(5, 10))
 
-        # --- Tab View for Files and Log ---
-        self.tab_view = ctk.CTkTabview(right_panel, fg_color=config.COLOR_FRAME, corner_radius=15,
-                                  segmented_button_selected_color=config.COLOR_ACCENT_SKYBLUE)
-        self.tab_view.grid(row=2, column=0, sticky='nsew', pady=10)
-        self.tab_view.add("Danh Sách File")
-        self.tab_view.add("Nhật Ký Hoạt Động")
-        
-        tree_frame = ctk.CTkFrame(self.tab_view.tab("Danh Sách File"), fg_color="transparent")
-        tree_frame.pack(expand=True, fill="both")
+    def _create_file_list_panel(self, master):
+        """Creates the file list (Treeview) panel."""
+        file_list_container = ctk.CTkFrame(master, fg_color=config.COLOR_FRAME, corner_radius=15)
+        file_list_container.grid(row=0, column=0, sticky='nsew', padx=(0, 10))
+        file_list_container.grid_rowconfigure(0, weight=1)
+        file_list_container.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(file_list_container, text="Danh Sách File", font=ctk.CTkFont(size=16, weight="bold")).pack(padx=10, pady=10, anchor='w')
+
+        tree_frame = ctk.CTkFrame(file_list_container, fg_color="transparent")
+        tree_frame.pack(expand=True, fill="both", padx=10, pady=(0,10))
 
         # Create Treeview with a new 'progress' column
         self.video_tree = ttk.Treeview(tree_frame, columns=("status", "name", "size", "drive", "time", "progress"), show="headings")
@@ -264,12 +307,22 @@ class AutoCopierApp(ctk.CTk):
         self.video_tree.configure(yscrollcommand=tree_scroll.set)
         tree_scroll.pack(side="right", fill="y")
 
-        self.log_textbox = ctk.CTkTextbox(self.tab_view.tab("Nhật Ký Hoạt Động"), state="disabled", fg_color=config.COLOR_EDITOR_BG, wrap="word", corner_radius=0, font=("Courier New", 12))
-        self.log_textbox.pack(expand=True, fill="both", padx=10, pady=10)
+    def _create_log_panel(self, master):
+        """Creates the log (Textbox) panel."""
+        log_container = ctk.CTkFrame(master, fg_color=config.COLOR_FRAME, corner_radius=15)
+        log_container.grid(row=0, column=1, sticky='nsew')
+        log_container.grid_rowconfigure(0, weight=1)
+        log_container.grid_columnconfigure(0, weight=1)
 
-        # --- Progress Bar Frame ---
-        self.progress_frame = ctk.CTkFrame(right_panel, fg_color=config.COLOR_FRAME, corner_radius=15)
-        self.progress_frame.grid(row=3, column=0, sticky='ew', pady=10)
+        ctk.CTkLabel(log_container, text="Nhật Ký Hoạt Động", font=ctk.CTkFont(size=16, weight="bold")).pack(padx=10, pady=10, anchor='w')
+
+        self.log_textbox = ctk.CTkTextbox(log_container, state="disabled", fg_color=config.COLOR_EDITOR_BG, wrap="word", corner_radius=0, font=("Courier New", 12))
+        self.log_textbox.pack(expand=True, fill="both", padx=10, pady=(0,10))
+
+    def _create_progress_frame(self):
+        """Creates the progress bar frame at the bottom."""
+        self.progress_frame = ctk.CTkFrame(self, fg_color=config.COLOR_FRAME, corner_radius=15)
+        self.progress_frame.grid(row=2, column=0, columnspan=2, sticky='ew', padx=15, pady=(0,10))
         self.progress_frame.grid_columnconfigure(0, weight=1)
         self.progress_status_label = ctk.CTkLabel(self.progress_frame, text="Sẵn sàng", anchor='w')
         self.progress_status_label.grid(row=0, column=0, sticky='ew', padx=15, pady=5)
@@ -282,9 +335,10 @@ class AutoCopierApp(ctk.CTk):
         self.progress_bar.grid(row=1, column=0, columnspan=2, sticky='ew', padx=15, pady=(0, 10))
         self.progress_frame.grid_remove() # Hide it initially
 
-        # --- Action Buttons ---
-        action_frame = ctk.CTkFrame(right_panel, fg_color=config.COLOR_FRAME, corner_radius=15)
-        action_frame.grid(row=4, column=0, sticky='ew')
+    def _create_action_frame(self):
+        """Creates the action buttons frame at the very bottom."""
+        action_frame = ctk.CTkFrame(self, fg_color=config.COLOR_FRAME, corner_radius=15)
+        action_frame.grid(row=3, column=0, columnspan=2, sticky='ew', padx=15, pady=(0,15))
         action_frame.grid_columnconfigure(3, weight=1)
         self.select_all_button = ctk.CTkButton(action_frame, text="Chọn Tất Cả", command=self.select_all_videos, state="disabled", text_color=config.COLOR_TEXT_HEADER)
         self.select_all_button.grid(row=0, column=0, padx=10, pady=10)
@@ -358,6 +412,12 @@ class AutoCopierApp(ctk.CTk):
         known_mountpoints = {p.mountpoint for p in drive_manager.get_removable_drives()}
         while self.monitoring:
             try:
+                # On Linux, attempt to mount any unmounted removable drives first.
+                # This is a no-op on other systems.
+                # It's in the thread so potential password prompts don't freeze the GUI.
+                if sys.platform.startswith("linux"):
+                    drive_manager.find_and_mount_unmounted_drives()
+
                 current_mountpoints = {p.mountpoint for p in drive_manager.get_removable_drives()}
                 new_drives = current_mountpoints - known_mountpoints
                 removed_drives = known_mountpoints - current_mountpoints
@@ -499,37 +559,54 @@ class AutoCopierApp(ctk.CTk):
         self.log_message(f"Đã xóa file từ {drive_name_to_clear} khỏi danh sách.", level="INFO")
 
     def _search_videos_thread(self, drive_path):
-        """Worker thread to find videos and add them to the UI as they are found."""
+        """
+        Worker thread to find videos. It ONLY collects file data. 
+        All UI updates are passed to the main thread. This is critical for cross-platform stability.
+        """
         try:
             extensions = self.file_extensions.get()
             
-            new_item_ids = []
-            any_files_found = False
+            # Step 1 (Worker Thread): Collect all video data without touching the UI.
+            found_videos = []
             for video_data in file_operations.find_files_on_drive(drive_path, extensions):
-                if not self.monitoring: return
-                any_files_found = True
-                # Use a queue-like approach to add items in the main thread
-                item_id = self.add_video_to_list(video_data)
-                if item_id:
-                    new_item_ids.append(item_id)
+                if not self.monitoring: 
+                    return # Exit early if the app is closing
+                found_videos.append(video_data)
 
-            # After the loop, finish the scan on the widget
-            if drive_path in self.drive_widgets:
-                self.after(0, lambda w=self.drive_widgets[drive_path]: w.finish_scan())
-            
-            # After a short delay, select all the newly added items
-            if new_item_ids:
-                self.after(100, lambda: self.video_tree.selection_add(new_item_ids))
-            
-            if not any_files_found:
-                self.after(0, self.show_no_videos_found, drive_path)
-            
-            self.after(100, self._update_ui_states)
+            # Step 2 (Worker Thread): Schedule a single function on the main thread to handle all UI updates.
+            self.after(0, self._populate_list_after_scan, drive_path, found_videos)
 
         except Exception as e:
             print(f"Error in search thread for {drive_path}: {e}")
-            # Use lambda to fix TypeError
+            # Ensure error messages are also sent to the main thread.
             self.after(0, lambda: self.log_message(f"Lỗi khi quét file trên {drive_path}: {e}", level="ERROR"))
+
+    def _populate_list_after_scan(self, drive_path, found_videos):
+        """
+        Runs on the MAIN THREAD. Populates the Treeview with results from the search thread.
+        """
+        # Step 3 (Main Thread): Update the drive widget to show the scan is complete.
+        if drive_path in self.drive_widgets:
+            self.drive_widgets[drive_path].finish_scan()
+        
+        if not found_videos:
+            self.show_no_videos_found(drive_path)
+        else:
+            # Step 4 (Main Thread): Add videos to the list and collect their UI IDs.
+            new_item_ids = []
+            for video_data in found_videos:
+                # This function is now safely called from the main thread.
+                item_id = self.add_video_to_list(video_data)
+                if item_id:
+                    new_item_ids.append(item_id)
+            
+            # Step 5 (Main Thread): Select all the newly added items.
+            if new_item_ids:
+                # Using `after` here gives the UI a moment to render the new items before selecting them.
+                self.after(50, lambda: self.video_tree.selection_add(new_item_ids))
+        
+        # Step 6 (Main Thread): Update the state of all buttons.
+        self._update_ui_states()
 
     def select_all_videos(self):
         """Selects all video items in the treeview."""
@@ -708,10 +785,17 @@ class AutoCopierApp(ctk.CTk):
                             if self.video_tree.exists(item_id):
                                 self.after(0, self.update_item_status, item_id, status_text, status_key, progress_value)
                     
-                    # Update real-time speed label
+                    # Update real-time speed label for the aggregate speed
                     if speed_mbps is not None:
-                        speed_text = f"{speed_mbps:.2f} MB/s"
-                        self.after(0, lambda: self.progress_speed_label.configure(text=speed_text))
+                        # Update per-drive speed display
+                        widget = self.drive_widgets.get(process_id)
+                        if widget:
+                            self.after(0, widget.update_speed, speed_mbps)
+
+                        # Store the latest speed for this specific process
+                        self.active_speeds[process_id] = speed_mbps
+                        # Schedule a single update for the total speed display
+                        self.after(10, self._update_total_speed_display) # Use a small delay to bundle updates
                     
                     # Log only key events, not continuous progress updates
                     if "Sao chép (" not in status_text:
@@ -757,14 +841,26 @@ class AutoCopierApp(ctk.CTk):
                 self._start_eject_drive(mountpoint)
 
             # Schedule the single finalization function to run on the main thread
-            self.after(0, self._finalize_copy_process, final_results, drive_name_for_report)
+            self.after(0, self._finalize_copy_process, final_results, mountpoint)
         
         except Exception as e:
             tb_str = traceback.format_exc()
             self.after(0, self._show_thread_error, "_copy_process_thread", tb_str)
 
-    def _finalize_copy_process(self, results, drive_name):
+    def _finalize_copy_process(self, results, mountpoint):
         """Handles all UI updates after a copy process is complete."""
+        drive_name = get_drive_name_from_mountpoint(mountpoint)
+
+        # Clear the individual speed display for the completed drive
+        widget = self.drive_widgets.get(mountpoint)
+        if widget:
+            self.after(0, widget.clear_speed)
+
+        # Remove the completed process from the speed tracking dictionary
+        if mountpoint in self.active_speeds:
+            del self.active_speeds[mountpoint]
+        self._update_total_speed_display() # Update speed display one last time
+
         # Hide progress bar and update status
         self.active_copy_processes -= 1
         
@@ -778,8 +874,8 @@ class AutoCopierApp(ctk.CTk):
         # Show the final pop-up report after a small delay to prevent UI conflicts on macOS
         self.after(100, lambda: self.show_final_report(results, drive_name))
 
-        # Switch view to the file list so the user can see the detailed status
-        self.tab_view.set("Danh Sách File")
+        # No longer need to switch tabs
+        # self.tab_view.set("Danh Sách File")
 
         # Bring the window to the front to make sure the user sees the result
         self.lift()
@@ -790,6 +886,16 @@ class AutoCopierApp(ctk.CTk):
         self._update_ui_states()
         
     # --- UI Helpers ---
+
+    def _update_total_speed_display(self):
+        """Calculates and displays the total speed from all active processes."""
+        if not self.active_speeds:
+            self.progress_speed_label.configure(text="")
+            return
+
+        total_speed = sum(self.active_speeds.values())
+        speed_text = f"Tổng: {total_speed:.2f} MB/s"
+        self.progress_speed_label.configure(text=speed_text)
 
     def add_video_to_list(self, video_data):
         """Add a single video file to the treeview and returns the item ID."""
