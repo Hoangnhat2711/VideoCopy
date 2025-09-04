@@ -121,6 +121,7 @@ class AutoCopierApp(ctk.CTk):
         self.monitoring = True
         self.active_copy_processes = 0 # Counter for ongoing copy tasks
         self.active_speeds = {} # {process_id: speed_mbps} - For total speed calculation
+        self.batch_results = [] # To store results for consolidated report
 
         # --- Load and Build ---
         self.load_app_config()
@@ -517,11 +518,16 @@ class AutoCopierApp(ctk.CTk):
         
         if success:
             self.after(0, lambda: self.log_message(f"Đã tháo thành công {drive_name}.", level="SUCCESS"))
-            if widget:
-                # Update the specific widget to show its final ejected status
-                self.after(0, widget.show_ejected_status)
-            else:
-                self.after(0, lambda: self.log_message(f"Lỗi khi tháo {drive_name}: {message}", level="ERROR"))
+            # Safely update the widget UI from the main thread to prevent crashes
+            def safe_update_widget():
+                widget = self.drive_widgets.get(mountpoint)
+                if widget:
+                    widget.show_ejected_status()
+            
+            self.after(0, safe_update_widget)
+
+        else:
+            self.after(0, lambda: self.log_message(f"Lỗi khi tháo {drive_name}: {message}", level="ERROR"))
         
         # The main monitoring thread will handle the drive disappearing from the list.
         # We can trigger a manual refresh to speed it up.
@@ -672,31 +678,49 @@ class AutoCopierApp(ctk.CTk):
         threading.Thread(target=self._auto_process_thread, args=(mountpoint,), daemon=True).start()
 
     def _auto_process_thread(self, mountpoint):
-        """The actual worker thread for the automatic process. No UI updates here."""
+        """The actual worker thread for the automatic process. Finds files then passes to main thread."""
         try:
-            # Use lambda to fix TypeError
             self.after(0, lambda: self.log_message(f"Tự động: Đang quét {mountpoint}...", level="INFO"))
             extensions = self.file_extensions.get()
             
+            # Step 1 (Worker Thread): Find all videos, don't touch UI.
             videos_to_process = list(file_operations.find_files_on_drive(mountpoint, extensions))
 
-            widget = self.drive_widgets.get(mountpoint)
-            if widget:
-                self.after(0, widget.finish_scan)
+            # Step 2 (Worker Thread): Schedule the UI update and copy kickoff on the main thread.
+            self.after(0, self._populate_and_start_auto_copy, mountpoint, videos_to_process)
 
-            if not videos_to_process:
-                # Use lambda to fix TypeError
-                self.after(0, lambda: self.log_message(f"Tự động: Không tìm thấy file phù hợp trên {mountpoint}.", level="INFO"))
-                return
-
-            # Use lambda to fix TypeError
-            self.after(0, lambda: self.log_message(f"Tự động: Tìm thấy {len(videos_to_process)} file trên {mountpoint}. Bắt đầu sao chép.", level="INFO"))
-            
-            self.start_copy_process(mountpoint, videos_to_process, item_ids=None)
         except Exception as e:
             print(f"Error in auto process thread for {mountpoint}: {e}")
-            # Use lambda to fix TypeError
             self.after(0, lambda: self.log_message(f"Lỗi khi tự động quét file trên {mountpoint}: {e}", level="ERROR"))
+
+    def _populate_and_start_auto_copy(self, mountpoint, videos_to_process):
+        """
+        Runs on the MAIN THREAD. Populates the list for auto-mode and then starts the copy.
+        """
+        # Step 3 (Main Thread): Update the drive widget UI.
+        widget = self.drive_widgets.get(mountpoint)
+        if widget:
+            widget.finish_scan()
+
+        if not videos_to_process:
+            self.log_message(f"Tự động: Không tìm thấy file phù hợp trên {mountpoint}.", level="INFO")
+            # If nothing was found, we should still eject the card automatically.
+            self._start_eject_drive(mountpoint)
+            return
+
+        # Step 4 (Main Thread): Add found videos to the GUI list.
+        item_ids = []
+        for video_data in videos_to_process:
+            item_id = self.add_video_to_list(video_data)
+            if item_id:
+                item_ids.append(item_id)
+        
+        # Give the UI a moment to render the new items.
+        self.update() 
+
+        # Step 5 (Main Thread): Log and start the actual copy process.
+        self.log_message(f"Tự động: Tìm thấy {len(videos_to_process)} file trên {mountpoint}. Bắt đầu sao chép.", level="INFO")
+        self.start_copy_process(mountpoint, videos_to_process, item_ids=item_ids)
 
     def start_copy_process(self, mountpoint, videos_to_process, item_ids):
         """Generic copy process starter for both auto and manual modes."""
@@ -850,6 +874,7 @@ class AutoCopierApp(ctk.CTk):
     def _finalize_copy_process(self, results, mountpoint):
         """Handles all UI updates after a copy process is complete."""
         drive_name = get_drive_name_from_mountpoint(mountpoint)
+        self.batch_results.append({'drive_name': drive_name, 'results': results})
 
         # Clear the individual speed display for the completed drive
         widget = self.drive_widgets.get(mountpoint)
@@ -861,26 +886,17 @@ class AutoCopierApp(ctk.CTk):
             del self.active_speeds[mountpoint]
         self._update_total_speed_display() # Update speed display one last time
 
-        # Hide progress bar and update status
+        # Decrement process counter
         self.active_copy_processes -= 1
-        
-        # Only hide the main progress bar if all tasks are done
-        if self.active_copy_processes == 0:
-            self.progress_frame.grid_remove()
         
         self.log_message(f"Hoàn tất quá trình cho {drive_name}.")
         self.log_message(f"Báo cáo: Thành công: {results['success'] - results['skipped']}, Bỏ qua: {results['skipped']}, Lỗi: {results['error']}", "INFO")
 
-        # Show the final pop-up report after a small delay to prevent UI conflicts on macOS
-        self.after(100, lambda: self.show_final_report(results, drive_name))
-
-        # No longer need to switch tabs
-        # self.tab_view.set("Danh Sách File")
-
-        # Bring the window to the front to make sure the user sees the result
-        self.lift()
-        self.attributes('-topmost', True)
-        self.after(200, lambda: self.attributes('-topmost', False))
+        # Only hide the main progress bar and show report if all tasks are done
+        if self.active_copy_processes == 0:
+            self.progress_frame.grid_remove()
+            # Show the final pop-up report after a small delay
+            self.after(100, self.show_consolidated_report)
         
         # Update button states
         self._update_ui_states()
@@ -956,17 +972,70 @@ class AutoCopierApp(ctk.CTk):
     def show_no_videos_found(self, drive_path):
         self.log_message(f"Không tìm thấy file video nào phù hợp trên {get_drive_name_from_mountpoint(drive_path)}.", "WARN")
 
-    def show_final_report(self, results, drive_name):
-        """Display a summary report after a process finishes."""
-        message = "Hoàn tất xử lý cho thẻ nhớ: {}\n\nThành công: {} tệp\nBỏ qua: {} tệp\nThất bại: {} tệp".format(drive_name, results['success'] - results['skipped'], results['skipped'], results['error'])
-        if results["error"] > 0:
-            messagebox.showwarning("Báo Cáo", message)
+    def show_consolidated_report(self):
+        """Display a single, consolidated report after all processes finish."""
+        if not self.batch_results:
+            return
+
+        total_success = 0
+        total_skipped = 0
+        total_error = 0
+        drive_reports = []
+
+        for report in self.batch_results:
+            drive_name = report['drive_name']
+            results = report['results']
+            
+            success = results['success'] - results['skipped']
+            skipped = results['skipped']
+            error = results['error']
+
+            total_success += success
+            total_skipped += skipped
+            total_error += error
+            drive_reports.append(f"  - {drive_name}: {success} thành công, {skipped} bỏ qua, {error} lỗi.")
+
+        num_drives = len(self.batch_results)
+        drive_plural = "các thẻ nhớ" if num_drives > 1 else "thẻ nhớ"
+        
+        message = (f"Hoàn tất xử lý cho {num_drives} {drive_plural}.\n\n"
+                   f"Tổng cộng:\n"
+                   f"  - Thành công: {total_success} tệp\n"
+                   f"  - Bỏ qua: {total_skipped} tệp\n"
+                   f"  - Thất bại: {total_error} tệp\n\n"
+                   f"Chi tiết:\n" +
+                   "\n".join(drive_reports))
+
+        if total_error > 0:
+            messagebox.showwarning("Báo Cáo Tổng Hợp", message)
         else:
-            messagebox.showinfo("Báo Cáo", message)
+            messagebox.showinfo("Báo Cáo Tổng Hợp", message)
+        
+        # Clear results for the next batch and reset UI
+        self.batch_results.clear()
+        self.after(100, self.reset_for_next_session)
 
     def clear_video_list(self):
         self.video_tree.delete(*self.video_tree.get_children())
         self.video_item_map.clear()
+        self._update_ui_states()
+
+    def reset_for_next_session(self):
+        """Resets the UI to a clean state for the next operation."""
+        self.log_message("Sẵn sàng cho phiên làm việc tiếp theo.", level="INFO")
+
+        # Clear the file list treeview
+        self.clear_video_list()
+
+        # Clear drive selections
+        self.selected_drives.clear()
+
+        # Reset all individual drive widgets to their initial state
+        # (This unchecks them and resets their progress bars)
+        for widget in self.drive_widgets.values():
+            widget.reset()
+
+        # Update all button states to reflect the reset state
         self._update_ui_states()
 
     def _show_thread_error(self, thread_name, error_details):

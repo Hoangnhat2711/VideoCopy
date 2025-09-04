@@ -24,6 +24,9 @@ def find_files_on_drive(drive_path, extensions_str):
     
     for root, _, files in os.walk(drive_path):
         for file in files:
+            # Ignore macOS metadata files
+            if file.startswith('._'):
+                continue
             if os.path.splitext(file)[1].lower() in extensions:
                 full_path = os.path.join(root, file)
                 try:
@@ -146,30 +149,48 @@ def copy_and_verify_file(source_path, destination_folder, conflict_policy, statu
 
 def wipe_drive_data(drive_path, status_callback):
     """
-    Deletes all files and then all empty directories on a given drive path.
+    Deletes all files and then all empty directories on a given drive path,
+    skipping known protected system files and directories.
     """
     status_callback("processing", "Chuẩn bị xóa thẻ...", None)
     files_deleted = 0
     dirs_deleted = 0
     errors = []
 
+    # Define protected directories that should not be touched
+    protected_dirs = {
+        ".Spotlight-V100", ".fseventsd", ".Trashes",
+        ".DocumentRevisions-V100", ".TemporaryItems",
+        "System Volume Information", "$RECYCLE.BIN"
+    }
+
     # First, delete all files
     try:
         for root, dirs, files in os.walk(drive_path, topdown=True):
+            # Exclude protected directories from being recursed into or deleted
+            dirs[:] = [d for d in dirs if d not in protected_dirs]
+
             for name in files:
+                # Also ignore common hidden/system files
+                if name.startswith('._') or name == '.DS_Store':
+                    continue
                 file_path = os.path.join(root, name)
                 try:
                     os.remove(file_path)
                     files_deleted += 1
                 except OSError as e:
-                    err_msg = f"Không thể xóa tệp {file_path}: {e}"
-                    errors.append(err_msg)
-                    print(err_msg)
+                    # It's okay if the file doesn't exist (e.g., race condition)
+                    if e.errno != 2: # errno 2 is "No such file or directory"
+                        err_msg = f"Không thể xóa tệp {file_path}: {e}"
+                        errors.append(err_msg)
+                        print(err_msg)
+
             # After deleting files in root, try to delete empty subdirectories
             for name in dirs:
                 dir_path = os.path.join(root, name)
                 try:
-                    if not os.listdir(dir_path):
+                    # Double check it's not a protected name before trying to remove
+                    if name not in protected_dirs and not os.listdir(dir_path):
                          os.rmdir(dir_path)
                          dirs_deleted += 1
                 except OSError as e:
