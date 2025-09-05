@@ -166,14 +166,14 @@ def wipe_drive_data(drive_path, status_callback):
         "System Volume Information", "$RECYCLE.BIN"
     }
 
-    # First, delete all files
+    # Step 1: Delete all files, walking from the top down.
+    status_callback("processing", "Đang xóa các tệp...", None)
     try:
         for root, dirs, files in os.walk(drive_path, topdown=True):
-            # Exclude protected directories from being recursed into or deleted
+            # Don't recurse into protected directories
             dirs[:] = [d for d in dirs if d not in protected_dirs]
 
             for name in files:
-                # Also ignore common hidden/system files
                 if name.startswith('._') or name == '.DS_Store':
                     continue
                 file_path = os.path.join(root, name)
@@ -181,28 +181,31 @@ def wipe_drive_data(drive_path, status_callback):
                     os.remove(file_path)
                     files_deleted += 1
                 except OSError as e:
-                    # It's okay if the file doesn't exist (e.g., race condition)
                     if e.errno != 2: # errno 2 is "No such file or directory"
                         err_msg = f"Không thể xóa tệp {file_path}: {e}"
                         errors.append(err_msg)
-                        print(err_msg)
+    except Exception as e:
+        errors.append(f"Lỗi khi xóa tệp: {e}")
 
-            # After deleting files in root, try to delete empty subdirectories
+    # Step 2: Delete all empty directories, walking from the bottom up.
+    status_callback("processing", "Đang dọn dẹp thư mục...", None)
+    try:
+        # We walk 'topdown=False' to process from the deepest directories first
+        for root, dirs, files in os.walk(drive_path, topdown=False):
+            # Don't try to delete the protected directories themselves
+            dirs[:] = [d for d in dirs if d not in protected_dirs]
+            
             for name in dirs:
                 dir_path = os.path.join(root, name)
                 try:
-                    # Double check it's not a protected name before trying to remove
-                    if name not in protected_dirs and not os.listdir(dir_path):
-                         os.rmdir(dir_path)
-                         dirs_deleted += 1
-                except OSError as e:
-                    # It might fail if a subdir wasn't empty due to file deletion errors
-                    err_msg = f"Không thể xóa thư mục rỗng {dir_path}: {e}"
-                    errors.append(err_msg)
-                    print(err_msg)
-
+                    os.rmdir(dir_path)
+                    dirs_deleted += 1
+                except OSError:
+                    # This might fail if the directory is not empty due to a file
+                    # deletion error above, which is acceptable to ignore.
+                    pass
     except Exception as e:
-        errors.append(f"Lỗi nghiêm trọng khi duyệt cây thư mục để xóa: {e}")
+         errors.append(f"Lỗi khi xóa thư mục: {e}")
 
     if errors:
         final_message = f"Hoàn tất xóa với {len(errors)} lỗi."

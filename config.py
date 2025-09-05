@@ -24,7 +24,6 @@ DEFAULT_VIDEO_EXTENSIONS = ".mp4, .mov, .mkv, .avi"
 DEFAULT_CONFLICT_POLICY = "Đổi Tên" # Options: "Bỏ Qua", "Ghi Đè", "Đổi Tên"
 
 # --- Kafka Settings ---
-KAFKA_ENABLED = False
 DEFAULT_KAFKA_SERVERS = "localhost:9092"
 DEFAULT_KAFKA_TOPIC = "video_copy_events"
 
@@ -51,7 +50,6 @@ def load_config():
         "destination_path": "",
         "video_extensions": DEFAULT_VIDEO_EXTENSIONS,
         "conflict_policy": DEFAULT_CONFLICT_POLICY,
-        "kafka_enabled": KAFKA_ENABLED,
         "kafka_servers": DEFAULT_KAFKA_SERVERS,
         "kafka_topic": DEFAULT_KAFKA_TOPIC
     }

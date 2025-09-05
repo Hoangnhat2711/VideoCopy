@@ -46,12 +46,14 @@ class DriveWidget(ctk.CTkFrame):
         # Drive name and description
         self.name_label = ctk.CTkLabel(self, text=get_drive_name_from_mountpoint(mountpoint), anchor="w", font=ctk.CTkFont(weight="bold"))
         self.name_label.grid(row=0, column=1, sticky="ew", padx=5, pady=(5,0))
-        self.description_label = ctk.CTkLabel(self, text=description, anchor="w", text_color="gray")
-        self.description_label.grid(row=1, column=1, sticky="ew", padx=5, pady=(0,5))
-
-        # Speed label - new addition
+        
+        # Speed label - now on the same row as the name
         self.speed_label = ctk.CTkLabel(self, text="", anchor="e", font=ctk.CTkFont(size=12), text_color=config.COLOR_ACCENT_GREEN)
-        self.speed_label.grid(row=0, column=2, rowspan=2, sticky="e", padx=10)
+        self.speed_label.grid(row=0, column=2, sticky="e", padx=10)
+
+        self.description_label = ctk.CTkLabel(self, text=description, anchor="w", text_color="gray")
+        self.description_label.grid(row=1, column=1, columnspan=2, sticky="ew", padx=5, pady=(0,5))
+
 
         # Progress bar
         self.progress_bar = ctk.CTkProgressBar(self, height=5, corner_radius=5, fg_color=config.COLOR_BG)
@@ -115,10 +117,9 @@ class AutoCopierApp(ctk.CTk):
         self.file_extensions = ctk.StringVar()
         self.conflict_policy = ctk.StringVar()
 
-        # Kafka settings variables
-        self.kafka_enabled = ctk.BooleanVar(value=False)
-        self.kafka_servers = ctk.StringVar()
-        self.kafka_topic = ctk.StringVar()
+        # Kafka config values (no longer UI variables)
+        self.kafka_servers = ""
+        self.kafka_topic = ""
 
         self.detected_drives = {}  # {mountpoint: {data}}
         self.video_item_map = {}   # {item_id: {data}}
@@ -134,6 +135,9 @@ class AutoCopierApp(ctk.CTk):
         self.load_app_config()
         self.create_widgets()
         self.setup_treeview_style()
+        
+        # Configure Kafka producer at startup
+        self.kafka_manager.configure_producer(self.kafka_servers)
         
         # --- Start Background Processes ---
         self.monitor_thread = threading.Thread(target=self.monitor_drives_thread, daemon=True)
@@ -176,7 +180,6 @@ class AutoCopierApp(ctk.CTk):
     def on_closing(self):
         """Handle window close event."""
         self.monitoring = False
-        self.kafka_manager.close_producer()
         self.destroy()
 
     def load_app_config(self):
@@ -185,21 +188,18 @@ class AutoCopierApp(ctk.CTk):
         self.destination_path.set(conf.get("destination_path", ""))
         self.file_extensions.set(conf.get("video_extensions", config.DEFAULT_VIDEO_EXTENSIONS))
         self.conflict_policy.set(conf.get("conflict_policy", config.DEFAULT_CONFLICT_POLICY))
-        # Load Kafka settings
-        self.kafka_enabled.set(conf.get("kafka_enabled", config.KAFKA_ENABLED))
-        self.kafka_servers.set(conf.get("kafka_servers", config.DEFAULT_KAFKA_SERVERS))
-        self.kafka_topic.set(conf.get("kafka_topic", config.DEFAULT_KAFKA_TOPIC))
+        # Load Kafka settings directly from config
+        self.kafka_servers = conf.get("kafka_servers", config.DEFAULT_KAFKA_SERVERS)
+        self.kafka_topic = conf.get("kafka_topic", config.DEFAULT_KAFKA_TOPIC)
 
     def save_app_config(self, *args):
         """Save the current settings to the config file."""
         conf_data = {
             "destination_path": self.destination_path.get(),
             "video_extensions": self.file_extensions.get(),
-            "conflict_policy": self.conflict_policy.get(),
-            "kafka_enabled": self.kafka_enabled.get(),
-            "kafka_servers": self.kafka_servers.get(),
-            "kafka_topic": self.kafka_topic.get()
+            "conflict_policy": self.conflict_policy.get()
         }
+        # Kafka settings are no longer saved from the UI
         config.save_config(conf_data)
 
     def browse_destination(self):
@@ -302,28 +302,6 @@ class AutoCopierApp(ctk.CTk):
                                            button_color=config.COLOR_ACCENT_SKYBLUE,
                                            command=self.save_app_config)
         conflict_menu.grid(row=2, column=1, sticky='w', padx=15, pady=(5, 10))
-        
-        # --- Kafka Frame ---
-        kafka_frame = ctk.CTkFrame(right_controls_panel, fg_color=config.COLOR_FRAME, corner_radius=15)
-        kafka_frame.grid(row=2, column=0, sticky='ew', pady=(5,0))
-        kafka_frame.grid_columnconfigure(1, weight=1)
-        
-        kafka_header_frame = ctk.CTkFrame(kafka_frame, fg_color="transparent")
-        kafka_header_frame.grid(row=0, column=0, columnspan=2, sticky='ew', padx=15, pady=(10,5))
-        
-        ctk.CTkLabel(kafka_header_frame, text="Tích Hợp Kafka", font=ctk.CTkFont(size=14, weight="bold")).pack(side="left")
-        kafka_switch = ctk.CTkSwitch(kafka_header_frame, text="Bật", variable=self.kafka_enabled, progress_color=config.COLOR_ACCENT_GREEN, command=self.save_app_config)
-        kafka_switch.pack(side="right")
-
-        ctk.CTkLabel(kafka_frame, text="Máy chủ (Servers):").grid(row=1, column=0, sticky='w', padx=15)
-        kafka_servers_entry = ctk.CTkEntry(kafka_frame, textvariable=self.kafka_servers)
-        kafka_servers_entry.grid(row=1, column=1, sticky='ew', padx=15, pady=5)
-        kafka_servers_entry.bind("<KeyRelease>", self.save_app_config)
-
-        ctk.CTkLabel(kafka_frame, text="Chủ đề (Topic):").grid(row=2, column=0, sticky='w', padx=15)
-        kafka_topic_entry = ctk.CTkEntry(kafka_frame, textvariable=self.kafka_topic)
-        kafka_topic_entry.grid(row=2, column=1, sticky='w', padx=15, pady=(5, 10))
-        kafka_topic_entry.bind("<KeyRelease>", self.save_app_config)
 
 
     def _create_file_list_panel(self, master):
@@ -941,8 +919,8 @@ class AutoCopierApp(ctk.CTk):
             self.after(100, self.show_consolidated_report)
         
         # --- KAFKA INTEGRATION ---
-        # Send message after all other UI updates for this drive are done
-        if self.kafka_enabled.get() and successfully_copied_paths:
+        # Send message if there are any successfully copied files
+        if successfully_copied_paths:
             threading.Thread(
                 target=self._send_kafka_message_thread,
                 args=(successfully_copied_paths, drive_name),
@@ -953,16 +931,7 @@ class AutoCopierApp(ctk.CTk):
         self._update_ui_states()
         
     def _send_kafka_message_thread(self, file_paths, drive_name):
-        """Configures Kafka producer and sends a message in a background thread."""
-        servers = self.kafka_servers.get()
-        topic = self.kafka_topic.get()
-        
-        # Configure the producer. It's safe to call this multiple times.
-        success, msg = self.kafka_manager.configure_producer(servers)
-        if not success:
-            # The manager already logs the detailed error via callback
-            return
-
+        """Sends a message using the pre-configured Kafka producer."""
         message = {
             'timestamp': datetime.now().isoformat(),
             'source_app': 'AutoCopierApp',
@@ -972,8 +941,8 @@ class AutoCopierApp(ctk.CTk):
             'file_count': len(file_paths)
         }
         
-        # The manager will log the outcome of this call via callback
-        self.kafka_manager.send_message(topic, message)
+        # The producer is configured at startup. We just send the message.
+        self.kafka_manager.send_message(self.kafka_topic, message)
 
     # --- UI Helpers ---
 
