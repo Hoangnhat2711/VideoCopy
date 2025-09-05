@@ -8,14 +8,12 @@ import sys
 import psutil # Added for disk space check
 import traceback # Import traceback module
 from datetime import datetime
-import json # Added for Kafka serialization
-from kafka import KafkaProducer # Added for Kafka producer
-from kafka.errors import NoBrokersAvailable # Added for Kafka error handling
 
 # Import from our new modules
 import config
 import file_operations
 import drive_manager
+from kafka_producer import KafkaManager
 
 def get_drive_name_from_mountpoint(mountpoint):
     """Gets a clean, usable folder name from a drive's mountpoint."""
@@ -117,6 +115,11 @@ class AutoCopierApp(ctk.CTk):
         self.file_extensions = ctk.StringVar()
         self.conflict_policy = ctk.StringVar()
 
+        # Kafka settings variables
+        self.kafka_enabled = ctk.BooleanVar(value=False)
+        self.kafka_servers = ctk.StringVar()
+        self.kafka_topic = ctk.StringVar()
+
         self.detected_drives = {}  # {mountpoint: {data}}
         self.video_item_map = {}   # {item_id: {data}}
         self.selected_drives = set() # To store mountpoints of selected drives
@@ -125,6 +128,7 @@ class AutoCopierApp(ctk.CTk):
         self.active_copy_processes = 0 # Counter for ongoing copy tasks
         self.active_speeds = {} # {process_id: speed_mbps} - For total speed calculation
         self.batch_results = [] # To store results for consolidated report
+        self.kafka_manager = KafkaManager(app_logger_callback=self.log_message)
 
         # --- Load and Build ---
         self.load_app_config()
@@ -172,6 +176,7 @@ class AutoCopierApp(ctk.CTk):
     def on_closing(self):
         """Handle window close event."""
         self.monitoring = False
+        self.kafka_manager.close_producer()
         self.destroy()
 
     def load_app_config(self):
@@ -180,6 +185,10 @@ class AutoCopierApp(ctk.CTk):
         self.destination_path.set(conf.get("destination_path", ""))
         self.file_extensions.set(conf.get("video_extensions", config.DEFAULT_VIDEO_EXTENSIONS))
         self.conflict_policy.set(conf.get("conflict_policy", config.DEFAULT_CONFLICT_POLICY))
+        # Load Kafka settings
+        self.kafka_enabled.set(conf.get("kafka_enabled", config.KAFKA_ENABLED))
+        self.kafka_servers.set(conf.get("kafka_servers", config.DEFAULT_KAFKA_SERVERS))
+        self.kafka_topic.set(conf.get("kafka_topic", config.DEFAULT_KAFKA_TOPIC))
 
     def save_app_config(self, *args):
         """Save the current settings to the config file."""
@@ -188,7 +197,7 @@ class AutoCopierApp(ctk.CTk):
             "video_extensions": self.file_extensions.get(),
             "conflict_policy": self.conflict_policy.get(),
             "kafka_enabled": self.kafka_enabled.get(),
-            "kafka_bootstrap_servers": self.kafka_servers.get(),
+            "kafka_servers": self.kafka_servers.get(),
             "kafka_topic": self.kafka_topic.get()
         }
         config.save_config(conf_data)
@@ -293,6 +302,29 @@ class AutoCopierApp(ctk.CTk):
                                            button_color=config.COLOR_ACCENT_SKYBLUE,
                                            command=self.save_app_config)
         conflict_menu.grid(row=2, column=1, sticky='w', padx=15, pady=(5, 10))
+        
+        # --- Kafka Frame ---
+        kafka_frame = ctk.CTkFrame(right_controls_panel, fg_color=config.COLOR_FRAME, corner_radius=15)
+        kafka_frame.grid(row=2, column=0, sticky='ew', pady=(5,0))
+        kafka_frame.grid_columnconfigure(1, weight=1)
+        
+        kafka_header_frame = ctk.CTkFrame(kafka_frame, fg_color="transparent")
+        kafka_header_frame.grid(row=0, column=0, columnspan=2, sticky='ew', padx=15, pady=(10,5))
+        
+        ctk.CTkLabel(kafka_header_frame, text="Tích Hợp Kafka", font=ctk.CTkFont(size=14, weight="bold")).pack(side="left")
+        kafka_switch = ctk.CTkSwitch(kafka_header_frame, text="Bật", variable=self.kafka_enabled, progress_color=config.COLOR_ACCENT_GREEN, command=self.save_app_config)
+        kafka_switch.pack(side="right")
+
+        ctk.CTkLabel(kafka_frame, text="Máy chủ (Servers):").grid(row=1, column=0, sticky='w', padx=15)
+        kafka_servers_entry = ctk.CTkEntry(kafka_frame, textvariable=self.kafka_servers)
+        kafka_servers_entry.grid(row=1, column=1, sticky='ew', padx=15, pady=5)
+        kafka_servers_entry.bind("<KeyRelease>", self.save_app_config)
+
+        ctk.CTkLabel(kafka_frame, text="Chủ đề (Topic):").grid(row=2, column=0, sticky='w', padx=15)
+        kafka_topic_entry = ctk.CTkEntry(kafka_frame, textvariable=self.kafka_topic)
+        kafka_topic_entry.grid(row=2, column=1, sticky='w', padx=15, pady=(5, 10))
+        kafka_topic_entry.bind("<KeyRelease>", self.save_app_config)
+
 
     def _create_file_list_panel(self, master):
         """Creates the file list (Treeview) panel."""
@@ -776,9 +808,9 @@ class AutoCopierApp(ctk.CTk):
 
     def _copy_process_thread(self, videos, destination_root, should_wipe, item_ids, process_id):
         """The main worker thread for copying, verifying, and deleting."""
-        successful_paths = [] # Define this outside the try block
         try:
             final_results = {"success": 0, "error": 0, "skipped": 0}
+            successfully_copied_paths = [] # Store paths for Kafka
             conflict_policy = self.conflict_policy.get()
             total_files = len(videos)
             
@@ -834,13 +866,14 @@ class AutoCopierApp(ctk.CTk):
 
                 # Perform the core operation
                 try:
-                    success, skipped, dest_path = file_operations.copy_and_verify_file(source_path, final_destination_folder, conflict_policy, status_callback)
+                    success, skipped, final_dest_path = file_operations.copy_and_verify_file(source_path, final_destination_folder, conflict_policy, status_callback)
                     if success:
                         final_results["success"] += 1
-                        if dest_path:  # Path is returned only on successful copy
-                            successful_paths.append(dest_path)
                         if skipped:
                             final_results["skipped"] += 1
+                        else: # Only add to list if it was actually copied, not skipped
+                            if final_dest_path:
+                                successfully_copied_paths.append(final_dest_path)
                     else:
                         final_results["error"] += 1
                 except Exception as e:
@@ -874,13 +907,13 @@ class AutoCopierApp(ctk.CTk):
                 self._start_eject_drive(mountpoint)
 
             # Schedule the single finalization function to run on the main thread
-            self.after(0, self._finalize_copy_process, final_results, mountpoint)
+            self.after(0, self._finalize_copy_process, final_results, mountpoint, successfully_copied_paths)
         
         except Exception as e:
             tb_str = traceback.format_exc()
             self.after(0, self._show_thread_error, "_copy_process_thread", tb_str)
 
-    def _finalize_copy_process(self, results, mountpoint):
+    def _finalize_copy_process(self, results, mountpoint, successfully_copied_paths):
         """Handles all UI updates after a copy process is complete."""
         drive_name = get_drive_name_from_mountpoint(mountpoint)
         self.batch_results.append({'drive_name': drive_name, 'results': results})
@@ -907,9 +940,41 @@ class AutoCopierApp(ctk.CTk):
             # Show the final pop-up report after a small delay
             self.after(100, self.show_consolidated_report)
         
+        # --- KAFKA INTEGRATION ---
+        # Send message after all other UI updates for this drive are done
+        if self.kafka_enabled.get() and successfully_copied_paths:
+            threading.Thread(
+                target=self._send_kafka_message_thread,
+                args=(successfully_copied_paths, drive_name),
+                daemon=True
+            ).start()
+            
         # Update button states
         self._update_ui_states()
         
+    def _send_kafka_message_thread(self, file_paths, drive_name):
+        """Configures Kafka producer and sends a message in a background thread."""
+        servers = self.kafka_servers.get()
+        topic = self.kafka_topic.get()
+        
+        # Configure the producer. It's safe to call this multiple times.
+        success, msg = self.kafka_manager.configure_producer(servers)
+        if not success:
+            # The manager already logs the detailed error via callback
+            return
+
+        message = {
+            'timestamp': datetime.now().isoformat(),
+            'source_app': 'AutoCopierApp',
+            'event_type': 'copy_complete',
+            'drive_name': drive_name,
+            'copied_files': file_paths,
+            'file_count': len(file_paths)
+        }
+        
+        # The manager will log the outcome of this call via callback
+        self.kafka_manager.send_message(topic, message)
+
     # --- UI Helpers ---
 
     def _update_total_speed_display(self):
@@ -1020,10 +1085,6 @@ class AutoCopierApp(ctk.CTk):
         else:
             messagebox.showinfo("Báo Cáo Tổng Hợp", message)
         
-        # Send Kafka message with all successful paths from the batch
-        if self.kafka_enabled.get() and all_successful_paths:
-            self._send_paths_to_kafka(all_successful_paths)
-
         # Clear results for the next batch and reset UI
         self.batch_results.clear()
         self.after(100, self.reset_for_next_session)
@@ -1032,45 +1093,6 @@ class AutoCopierApp(ctk.CTk):
         self.video_tree.delete(*self.video_tree.get_children())
         self.video_item_map.clear()
         self._update_ui_states()
-
-    def _send_paths_to_kafka(self, file_paths):
-        """Sends a list of file paths to a Kafka topic in a separate thread."""
-        threading.Thread(target=self._kafka_producer_thread, args=(file_paths,), daemon=True).start()
-
-    def _kafka_producer_thread(self, file_paths):
-        """Worker thread to send a Kafka message. Does not touch the UI."""
-        bootstrap_servers = self.kafka_servers.get()
-        topic = self.kafka_topic.get()
-        num_paths = len(file_paths)
-
-        try:
-            self.log_message(f"Kafka: Đang chuẩn bị gửi {num_paths} đường dẫn...", level="INFO")
-            self.log_message(f"Kafka: Kết nối tới server: {bootstrap_servers}", level="DEBUG")
-            self.log_message(f"Kafka: Gửi tới topic: {topic}", level="DEBUG")
-            
-            producer = KafkaProducer(
-                bootstrap_servers=bootstrap_servers,
-                value_serializer=lambda v: json.dumps(v).encode('utf-8'),
-                api_version=(0, 10, 1), # Good default for compatibility
-                request_timeout_ms=10000 # 10 second timeout
-            )
-            
-            message = {"copied_videos": file_paths, "timestamp": datetime.now().isoformat()}
-            
-            future = producer.send(topic, message)
-            # Block for 'synchronous' sends with timeout
-            future.get(timeout=10)
-
-            producer.flush() # Wait for all messages to be sent
-            producer.close()
-            
-            self.log_message(f"Kafka: Đã gửi thành công {num_paths} đường dẫn tới topic '{topic}'.", level="SUCCESS")
-
-        except NoBrokersAvailable:
-            self.log_message(f"Lỗi Kafka: Không thể kết nối tới máy chủ tại '{bootstrap_servers}'. Vui lòng kiểm tra lại địa chỉ và đảm bảo Kafka broker đang hoạt động.", level="ERROR")
-        except Exception as e:
-            self.log_message(f"Lỗi Kafka: Một lỗi không xác định đã xảy ra khi gửi tin nhắn: {e}", level="ERROR")
-            print(traceback.format_exc())
 
     def reset_for_next_session(self):
         """Resets the UI to a clean state for the next operation."""
