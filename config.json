@@ -1,5 +1,8 @@
 {
-    "destination_path": "/Users/tranhoangnhat/Downloads",
+    "destination_path": "/Users/tranhoangnhat/Movies",
     "video_extensions": ".mp4, .mov, .mkv, .avi",
-    "conflict_policy": "\u0110\u1ed5i T\u00ean"
+    "conflict_policy": "Đổi Tên",
+    "kafka_enabled": true,
+    "kafka_bootstrap_servers": "localhost:9092",
+    "kafka_topic": "video_copy_events"
 }

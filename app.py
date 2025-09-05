@@ -8,6 +8,9 @@ import sys
 import psutil # Added for disk space check
 import traceback # Import traceback module
 from datetime import datetime
+import json # Added for Kafka serialization
+from kafka import KafkaProducer # Added for Kafka producer
+from kafka.errors import NoBrokersAvailable # Added for Kafka error handling
 
 # Import from our new modules
 import config
@@ -183,7 +186,10 @@ class AutoCopierApp(ctk.CTk):
         conf_data = {
             "destination_path": self.destination_path.get(),
             "video_extensions": self.file_extensions.get(),
-            "conflict_policy": self.conflict_policy.get()
+            "conflict_policy": self.conflict_policy.get(),
+            "kafka_enabled": self.kafka_enabled.get(),
+            "kafka_bootstrap_servers": self.kafka_servers.get(),
+            "kafka_topic": self.kafka_topic.get()
         }
         config.save_config(conf_data)
 
@@ -770,6 +776,7 @@ class AutoCopierApp(ctk.CTk):
 
     def _copy_process_thread(self, videos, destination_root, should_wipe, item_ids, process_id):
         """The main worker thread for copying, verifying, and deleting."""
+        successful_paths = [] # Define this outside the try block
         try:
             final_results = {"success": 0, "error": 0, "skipped": 0}
             conflict_policy = self.conflict_policy.get()
@@ -827,9 +834,11 @@ class AutoCopierApp(ctk.CTk):
 
                 # Perform the core operation
                 try:
-                    success, skipped = file_operations.copy_and_verify_file(source_path, final_destination_folder, conflict_policy, status_callback)
+                    success, skipped, dest_path = file_operations.copy_and_verify_file(source_path, final_destination_folder, conflict_policy, status_callback)
                     if success:
                         final_results["success"] += 1
+                        if dest_path:  # Path is returned only on successful copy
+                            successful_paths.append(dest_path)
                         if skipped:
                             final_results["skipped"] += 1
                     else:
@@ -1011,6 +1020,10 @@ class AutoCopierApp(ctk.CTk):
         else:
             messagebox.showinfo("Báo Cáo Tổng Hợp", message)
         
+        # Send Kafka message with all successful paths from the batch
+        if self.kafka_enabled.get() and all_successful_paths:
+            self._send_paths_to_kafka(all_successful_paths)
+
         # Clear results for the next batch and reset UI
         self.batch_results.clear()
         self.after(100, self.reset_for_next_session)
@@ -1019,6 +1032,45 @@ class AutoCopierApp(ctk.CTk):
         self.video_tree.delete(*self.video_tree.get_children())
         self.video_item_map.clear()
         self._update_ui_states()
+
+    def _send_paths_to_kafka(self, file_paths):
+        """Sends a list of file paths to a Kafka topic in a separate thread."""
+        threading.Thread(target=self._kafka_producer_thread, args=(file_paths,), daemon=True).start()
+
+    def _kafka_producer_thread(self, file_paths):
+        """Worker thread to send a Kafka message. Does not touch the UI."""
+        bootstrap_servers = self.kafka_servers.get()
+        topic = self.kafka_topic.get()
+        num_paths = len(file_paths)
+
+        try:
+            self.log_message(f"Kafka: Đang chuẩn bị gửi {num_paths} đường dẫn...", level="INFO")
+            self.log_message(f"Kafka: Kết nối tới server: {bootstrap_servers}", level="DEBUG")
+            self.log_message(f"Kafka: Gửi tới topic: {topic}", level="DEBUG")
+            
+            producer = KafkaProducer(
+                bootstrap_servers=bootstrap_servers,
+                value_serializer=lambda v: json.dumps(v).encode('utf-8'),
+                api_version=(0, 10, 1), # Good default for compatibility
+                request_timeout_ms=10000 # 10 second timeout
+            )
+            
+            message = {"copied_videos": file_paths, "timestamp": datetime.now().isoformat()}
+            
+            future = producer.send(topic, message)
+            # Block for 'synchronous' sends with timeout
+            future.get(timeout=10)
+
+            producer.flush() # Wait for all messages to be sent
+            producer.close()
+            
+            self.log_message(f"Kafka: Đã gửi thành công {num_paths} đường dẫn tới topic '{topic}'.", level="SUCCESS")
+
+        except NoBrokersAvailable:
+            self.log_message(f"Lỗi Kafka: Không thể kết nối tới máy chủ tại '{bootstrap_servers}'. Vui lòng kiểm tra lại địa chỉ và đảm bảo Kafka broker đang hoạt động.", level="ERROR")
+        except Exception as e:
+            self.log_message(f"Lỗi Kafka: Một lỗi không xác định đã xảy ra khi gửi tin nhắn: {e}", level="ERROR")
+            print(traceback.format_exc())
 
     def reset_for_next_session(self):
         """Resets the UI to a clean state for the next operation."""

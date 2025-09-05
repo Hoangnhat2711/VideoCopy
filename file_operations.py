@@ -110,7 +110,7 @@ def copy_and_verify_file(source_path, destination_folder, conflict_policy, statu
     if os.path.exists(dest_path):
         if conflict_policy == "Bỏ Qua":
             status_callback("success", "Bỏ qua (đã tồn tại)", 1.0, 0.0) # Mark as complete
-            return True, True # Skipped successfully
+            return True, True, None # Skipped successfully, no path to report
         elif conflict_policy == "Đổi Tên":
             dest_path = _handle_conflict(dest_path)
         # If policy is "Ghi Đè", we just proceed
@@ -139,13 +139,13 @@ def copy_and_verify_file(source_path, destination_folder, conflict_policy, statu
         # Deletion logic is now handled separately at the drive level.
         
         status_callback("success", "Hoàn thành & Đã xác thực", 1.0, 0.0) # Mark as complete
-        return True, False # Processed successfully (not skipped)
+        return True, False, dest_path # Processed successfully, return destination path
 
     except Exception as e:
         error_message = "Lỗi: {}".format(e)
         status_callback("error", error_message, -1.0, None) # Mark as error
         print("Failed to process {}: {}".format(source_path, e))
-        return False, False # Failed (not skipped)
+        return False, False, None # Failed, no path to report
 
 def wipe_drive_data(drive_path, status_callback):
     """

@@ -23,6 +23,11 @@ COLOR_STATUS_WARN = "#d29922"
 DEFAULT_VIDEO_EXTENSIONS = ".mp4, .mov, .mkv, .avi"
 DEFAULT_CONFLICT_POLICY = "Đổi Tên" # Options: "Bỏ Qua", "Ghi Đè", "Đổi Tên"
 
+# --- Kafka Settings ---
+KAFKA_ENABLED = True
+KAFKA_BOOTSTRAP_SERVERS = "localhost:9092"
+KAFKA_TOPIC = "video_copy_events"
+
 
 def save_config(data):
     """Saves the given data dictionary to the config file."""
@@ -45,5 +50,8 @@ def load_config():
     return {
         "destination_path": "",
         "video_extensions": DEFAULT_VIDEO_EXTENSIONS,
-        "conflict_policy": DEFAULT_CONFLICT_POLICY
+        "conflict_policy": DEFAULT_CONFLICT_POLICY,
+        "kafka_enabled": KAFKA_ENABLED,
+        "kafka_bootstrap_servers": KAFKA_BOOTSTRAP_SERVERS,
+        "kafka_topic": KAFKA_TOPIC
     }
