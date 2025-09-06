@@ -1,3 +1,4 @@
 psutil
-customtkinter
 confluent-kafka
+PySide6
+qt-material

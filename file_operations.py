@@ -151,68 +151,56 @@ def copy_and_verify_file(source_path, destination_folder, conflict_policy, statu
 
 def wipe_drive_data(drive_path, status_callback):
     """
-    Deletes all files and then all empty directories on a given drive path,
-    skipping known protected system files and directories.
+    Xóa toàn bộ dữ liệu trên thẻ: xóa tất cả file và toàn bộ thư mục rỗng còn lại.
+    Không còn loại trừ các thư mục "được bảo vệ"; cố gắng dọn sạch hoàn toàn.
     """
     status_callback("processing", "Chuẩn bị xóa thẻ...", None)
     files_deleted = 0
     dirs_deleted = 0
     errors = []
 
-    # Define protected directories that should not be touched
-    protected_dirs = {
-        ".Spotlight-V100", ".fseventsd", ".Trashes",
-        ".DocumentRevisions-V100", ".TemporaryItems",
-        "System Volume Information", "$RECYCLE.BIN"
-    }
-
-    # Step 1: Delete all files, walking from the top down.
+    # Bước 1: Xóa mọi tệp (kể cả ẩn), duyệt từ trên xuống
     status_callback("processing", "Đang xóa các tệp...", None)
     try:
         for root, dirs, files in os.walk(drive_path, topdown=True):
-            # Don't recurse into protected directories
-            dirs[:] = [d for d in dirs if d not in protected_dirs]
-
             for name in files:
-                if name.startswith('._') or name == '.DS_Store':
-                    continue
                 file_path = os.path.join(root, name)
                 try:
                     os.remove(file_path)
                     files_deleted += 1
                 except OSError as e:
-                    if e.errno != 2: # errno 2 is "No such file or directory"
-                        err_msg = f"Không thể xóa tệp {file_path}: {e}"
-                        errors.append(err_msg)
+                    # Bỏ qua lỗi "không tồn tại"; lưu các lỗi còn lại
+                    if e.errno != 2:
+                        errors.append(f"Không thể xóa tệp {file_path}: {e}")
     except Exception as e:
         errors.append(f"Lỗi khi xóa tệp: {e}")
 
-    # Step 2: Delete all empty directories, walking from the bottom up.
+    # Bước 2: Xóa toàn bộ thư mục rỗng, duyệt từ dưới lên
     status_callback("processing", "Đang dọn dẹp thư mục...", None)
     try:
-        # We walk 'topdown=False' to process from the deepest directories first
-        for root, dirs, files in os.walk(drive_path, topdown=False):
-            # Don't try to delete the protected directories themselves
-            dirs[:] = [d for d in dirs if d not in protected_dirs]
-            
-            for name in dirs:
-                dir_path = os.path.join(root, name)
-                try:
-                    os.rmdir(dir_path)
-                    dirs_deleted += 1
-                except OSError:
-                    # This might fail if the directory is not empty due to a file
-                    # deletion error above, which is acceptable to ignore.
-                    pass
+        # Lặp nhiều lần trong trường hợp có các cấp thư mục lồng nhau
+        while True:
+            removed_in_pass = 0
+            for root, dirs, files in os.walk(drive_path, topdown=False):
+                for name in dirs:
+                    dir_path = os.path.join(root, name)
+                    try:
+                        os.rmdir(dir_path)
+                        dirs_deleted += 1
+                        removed_in_pass += 1
+                    except OSError:
+                        # Thư mục không rỗng (do lỗi xóa tệp trước đó) hoặc bị hệ thống khóa; bỏ qua
+                        pass
+            if removed_in_pass == 0:
+                break
     except Exception as e:
-         errors.append(f"Lỗi khi xóa thư mục: {e}")
+        errors.append(f"Lỗi khi xóa thư mục: {e}")
 
     if errors:
-        final_message = f"Hoàn tất xóa với {len(errors)} lỗi."
+        final_message = f"Hoàn tất xóa với {len(errors)} lỗi. Đã xóa {files_deleted} tệp, {dirs_deleted} thư mục."
         status_callback("error", final_message, None)
-        print(f"Errors wiping drive {drive_path}:\n" + "\n".join(errors))
         return False, final_message
     else:
-        final_message = f"Đã xóa {files_deleted} tệp và {dirs_deleted} thư mục."
+        final_message = f"Đã xóa {files_deleted} tệp và {dirs_deleted} thư mục. Thẻ trống hoàn toàn."
         status_callback("success", "Đã xóa sạch dữ liệu trên thẻ.", None)
         return True, final_message
